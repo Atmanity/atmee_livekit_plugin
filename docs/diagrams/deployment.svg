@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 940 306" role="img" aria-label="Deployment: developer infrastructure, Atmee's GKE clusters, and the two Supabase projects with their release branches." xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, system-ui, sans-serif" style="max-width:100%;height:auto;display:block">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<style>
+  svg { color: #1b2a2e; }
+  .t { fill: #1b2a2e; } .tm { fill: #5b6b70; }
+  .node { fill: #ffffff; stroke: #1b2a2e; stroke-width: 1.2; }
+  .node.new { fill: #fbeee2; stroke: #b4560e; }
+  .node.db { fill: #e6f2f0; stroke: #3d8b84; }
+  .node.dim { fill: #f5f8f7; stroke: #d5dedc; }
+  .actor { fill: #e6f2f0; stroke: #3d8b84; stroke-width: 1.2; }
+  .group { fill: #f5f8f7; stroke: #d5dedc; stroke-width: 1; }
+  .edge { stroke: #1b2a2e; stroke-width: 1.3; fill: none; }
+  .life { stroke: #d5dedc; stroke-width: 1; stroke-dasharray: 3 4; }
+  .loop { fill: none; stroke: #2f5bea; stroke-width: 1; stroke-dasharray: 6 4; }
+  .looptag { fill: #2f5bea; } .looptag + text { fill: #ffffff; }
+  .plate { fill: #ffffff; } .note { fill: #fbeee2; stroke: #b4560e; stroke-width: 1; }
+</style>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+<rect x="8" y="8" width="300" height="290" rx="6" class="group"/>
+<text x="20.0" y="28.0" text-anchor="start" class="tm" font-size="11" font-weight="600">DEVELOPER INFRASTRUCTURE</text>
+<rect x="40" y="48" width="236" height="54" rx="4" class="node"/>
+<text x="158.0" y="72.0" text-anchor="middle" class="t" font-size="12.5">Agent worker + plugin</text>
+<text x="158.0" y="87.0" text-anchor="middle" class="t" font-size="12.5">(anywhere Python runs)</text>
+<rect x="40" y="206" width="236" height="54" rx="4" class="node"/>
+<text x="158.0" y="230.0" text-anchor="middle" class="t" font-size="12.5">LiveKit Cloud or self-hosted</text>
+<text x="158.0" y="245.0" text-anchor="middle" class="t" font-size="12.5">(the developer's project)</text>
+<rect x="340" y="8" width="380" height="290" rx="6" class="group"/>
+<text x="352.0" y="28.0" text-anchor="start" class="tm" font-size="11" font-weight="600">ATMEE · GKE us-central1 · us-east4 · us-west1</text>
+<rect x="372" y="48" width="316" height="54" rx="4" class="node"/>
+<text x="530.0" y="72.0" text-anchor="middle" class="t" font-size="12.5">session_service</text>
+<text x="530.0" y="87.0" text-anchor="middle" class="t" font-size="12.5">Argo CD · image tag from main</text>
+<rect x="372" y="130" width="140" height="54" rx="4" class="node"/>
+<text x="442.0" y="154.0" text-anchor="middle" class="t" font-size="12.5">Envoy</text>
+<text x="442.0" y="169.0" text-anchor="middle" class="t" font-size="12.5">/lk_avatar · 503 retry</text>
+<rect x="548" y="130" width="140" height="54" rx="4" class="node"/>
+<text x="618.0" y="154.0" text-anchor="middle" class="t" font-size="12.5">GPU pods</text>
+<text x="618.0" y="169.0" text-anchor="middle" class="t" font-size="12.5">1 GPU each · KEDA 2–10</text>
+<rect x="372" y="236" width="316" height="44" rx="4" class="node dim"/>
+<text x="530.0" y="262.5" text-anchor="middle" class="t" font-size="12.5">atmanity-agent CPU pool (Atmee's own product)</text>
+<rect x="752" y="8" width="180" height="290" rx="6" class="group"/>
+<text x="764.0" y="28.0" text-anchor="start" class="tm" font-size="11" font-weight="600">SUPABASE</text>
+<rect x="776" y="48" width="132" height="54" rx="4" class="node db"/>
+<text x="842.0" y="72.0" text-anchor="middle" class="t" font-size="12.5">production</text>
+<text x="842.0" y="87.0" text-anchor="middle" class="t" font-size="12.5">← main (releases)</text>
+<rect x="776" y="130" width="132" height="54" rx="4" class="node db"/>
+<text x="842.0" y="154.0" text-anchor="middle" class="t" font-size="12.5">staging</text>
+<text x="842.0" y="169.0" text-anchor="middle" class="t" font-size="12.5">← dev</text>
+<line x1="276.0" y1="75.0" x2="368.0" y2="75.0" class="edge" marker-end="url(#ah)"/>
+<text x="322.0" y="66.0" text-anchor="middle" class="tm" font-size="11">HTTPS</text>
+<line x1="442.0" y1="102.0" x2="442.0" y2="126.0" class="edge" marker-end="url(#ah)"/>
+<line x1="512.0" y1="157.0" x2="544.0" y2="157.0" class="edge" marker-end="url(#ah)"/>
+<line x1="618.0" y1="184.0" x2="280.0" y2="226.0" class="edge" marker-end="url(#ah)"/>
+<text x="470.0" y="226.0" text-anchor="middle" class="tm" font-size="11">joins room (WebRTC)</text>
+<line x1="158.0" y1="102.0" x2="158.0" y2="202.0" class="edge" marker-end="url(#ah)"/>
+<text x="166.0" y="156.0" text-anchor="start" class="tm" font-size="11">audio stream</text>
+<line x1="688.0" y1="75.0" x2="772.0" y2="75.0" class="edge" marker-end="url(#ah)"/>
+</svg>
