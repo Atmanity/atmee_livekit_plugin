@@ -118,7 +118,7 @@ def context():
     b.append(arrow(670, 175, 696, 175))
     b.append(multitext(683, 224, ["reserve", "tick", "finalize"], size=11, cls="tm", lh=12))
     b.append(arrow(585, 200, 585, 296))
-    b.append(multitext(593, 246, ["POST /lk_avatar (in-cluster, unchanged)", "SSE start handshake only"], anchor="start", size=11.5, cls="tm", lh=14))
+    b.append(multitext(593, 246, ["POST /lk_avatar (in-cluster, unchanged)", "response reports the start events, then closes"], anchor="start", size=11.5, cls="tm", lh=14))
     b.append(arrow(650, 322, 676, 322))
     b.append(arrow(690, 360, 406, 336))
     b.append(multitext(560, 386, ["joins as atmee-avatar-agent", "publishes video + audio"], size=11.5, cls="tm", lh=14))
