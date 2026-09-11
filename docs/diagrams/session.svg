@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1110 1190" role="img" aria-label="One avatar session from token minting to finalize; the GPU pod's SSE stream carries liveness." xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, system-ui, sans-serif" style="max-width:100%;height:auto;display:block">
+<svg viewBox="0 0 1110 1098" role="img" aria-label="One avatar session from token minting to finalize; the plugin ends it, LiveKit participant semantics cover the rest." xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans, system-ui, sans-serif" style="max-width:100%;height:auto;display:block">
 <rect width="100%" height="100%" fill="#ffffff"/>
 <style>
   svg { color: #1b2a2e; }
@@ -17,10 +17,10 @@
   .plate { fill: #ffffff; } .note { fill: #fbeee2; stroke: #b4560e; stroke-width: 1; }
 </style>
 <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
-<line x1="120" y1="52" x2="120" y2="1186" class="life"/>
-<line x1="410" y1="52" x2="410" y2="1186" class="life"/>
-<line x1="700" y1="52" x2="700" y2="1186" class="life"/>
-<line x1="990" y1="52" x2="990" y2="1186" class="life"/>
+<line x1="120" y1="52" x2="120" y2="1094" class="life"/>
+<line x1="410" y1="52" x2="410" y2="1094" class="life"/>
+<line x1="700" y1="52" x2="700" y2="1094" class="life"/>
+<line x1="990" y1="52" x2="990" y2="1094" class="life"/>
 <rect x="25.0" y="8" width="190" height="44" rx="4" class="actor"/>
 <text x="120.0" y="27.0" text-anchor="middle" class="t" font-size="12.5" font-weight="600">Agent job</text>
 <text x="120.0" y="42.0" text-anchor="middle" class="t" font-size="12.5" font-weight="600">+ plugin</text>
@@ -32,7 +32,7 @@
 <rect x="895.0" y="8" width="190" height="44" rx="4" class="actor"/>
 <text x="990.0" y="27.0" text-anchor="middle" class="t" font-size="12.5" font-weight="600">Developer's</text>
 <text x="990.0" y="42.0" text-anchor="middle" class="t" font-size="12.5" font-weight="600">LiveKit room</text>
-<rect x="40" y="673" width="1030" height="242" rx="4" class="loop"/>
+<rect x="40" y="673" width="1030" height="231" rx="4" class="loop"/>
 <rect x="40" y="673" width="102" height="20" class="looptag"/>
 <text x="49.0" y="687.0" text-anchor="start" class="t" font-size="11.5" font-weight="600">conversation</text>
 <path d="M120,96.0 h 12 v 18 h -8" fill="none" class="edge" marker-end="url(#ah)"/>
@@ -48,9 +48,9 @@
 <text x="432.0" y="216.0" text-anchor="start" class="t" font-size="12">parse token → room, identity</text>
 <text x="432.0" y="230.0" text-anchor="start" class="t" font-size="12">reserve session (billing_mode)</text>
 <text x="432.0" y="244.0" text-anchor="start" class="t" font-size="12">load + presign avatar config</text>
-<rect x="429.1" y="271.0" width="251.8" height="34.0" rx="3" class="plate"/>
-<text x="555.0" y="286.0" text-anchor="middle" class="t" font-size="12">POST /lk_avatar</text>
-<text x="555.0" y="300.0" text-anchor="middle" class="t" font-size="12">{url, token, config, session_minutes}</text>
+<rect x="432.4" y="271.0" width="245.3" height="34.0" rx="3" class="plate"/>
+<text x="555.0" y="286.0" text-anchor="middle" class="t" font-size="12">POST /lk_avatar {url, token, config}</text>
+<text x="555.0" y="300.0" text-anchor="middle" class="t" font-size="12">(unchanged)</text>
 <line x1="410.0" y1="314.0" x2="697.0" y2="314.0" class="edge" marker-end="url(#ah)"/>
 <rect x="497.2" y="338.0" width="115.7" height="20.0" rx="3" class="plate"/>
 <text x="555.0" y="353.0" text-anchor="middle" class="t" font-size="12">SSE initializing</text>
@@ -67,7 +67,7 @@
 <line x1="700.0" y1="529.0" x2="987.0" y2="529.0" class="edge" marker-end="url(#ah)"/>
 <rect x="406.4" y="553.0" width="297.1" height="34.0" rx="3" class="plate"/>
 <text x="555.0" y="568.0" text-anchor="middle" class="t" font-size="12">SSE avatar_joined · user_joined (agent seen)</text>
-<text x="555.0" y="582.0" text-anchor="middle" class="t" font-size="12">stream stays open</text>
+<text x="555.0" y="582.0" text-anchor="middle" class="t" font-size="12">then the stream closes, as today</text>
 <line x1="700.0" y1="596.0" x2="413.0" y2="596.0" class="edge" stroke-dasharray="5 4" marker-end="url(#ah)"/>
 <rect x="442.1" y="620.0" width="225.8" height="20.0" rx="3" class="plate"/>
 <text x="555.0" y="635.0" text-anchor="middle" class="t" font-size="12">wait for the avatar's video track</text>
@@ -81,22 +81,17 @@
 <rect x="774.2" y="809.0" width="141.6" height="20.0" rx="3" class="plate"/>
 <text x="845.0" y="824.0" text-anchor="middle" class="t" font-size="12">synced video + audio</text>
 <line x1="700.0" y1="838.0" x2="987.0" y2="838.0" class="edge" marker-end="url(#ah)"/>
-<rect x="416.2" y="862.0" width="277.7" height="20.0" rx="3" class="plate"/>
-<text x="555.0" y="877.0" text-anchor="middle" class="t" font-size="12">SSE heartbeat (6 s) → metered tick (60 s)</text>
-<line x1="700.0" y1="891.0" x2="413.0" y2="891.0" class="edge" stroke-dasharray="5 4" marker-end="url(#ah)"/>
-<rect x="152.1" y="927.0" width="225.8" height="20.0" rx="3" class="plate"/>
-<text x="265.0" y="942.0" text-anchor="middle" class="t" font-size="12">POST /v1/avatar_sessions/{id}/end</text>
-<line x1="120.0" y1="956.0" x2="407.0" y2="956.0" class="edge" marker-end="url(#ah)"/>
-<rect x="403.2" y="980.0" width="303.6" height="20.0" rx="3" class="plate"/>
-<text x="555.0" y="995.0" text-anchor="middle" class="t" font-size="12">close SSE → worker stops (stop_on_disconnect)</text>
-<line x1="410.0" y1="1009.0" x2="697.0" y2="1009.0" class="edge" marker-end="url(#ah)"/>
-<rect x="455.0" y="1033.0" width="199.9" height="20.0" rx="3" class="plate"/>
-<text x="555.0" y="1048.0" text-anchor="middle" class="t" font-size="12">SSE user_left · stream closes</text>
-<line x1="700.0" y1="1062.0" x2="413.0" y2="1062.0" class="edge" stroke-dasharray="5 4" marker-end="url(#ah)"/>
-<path d="M410,1090.0 h 12 v 18 h -8" fill="none" class="edge" marker-end="url(#ah)"/>
-<rect x="428.0" y="1086.0" width="115.7" height="20.0" rx="3" class="plate"/>
-<text x="432.0" y="1101.0" text-anchor="start" class="t" font-size="12">finalize billing</text>
-<rect x="80" y="1128" width="950" height="44" rx="3" class="note"/>
-<text x="555.0" y="1141.0" text-anchor="middle" class="t" font-size="12">If the agent leaves first, the worker leaves on its own and reports user_left.</text>
-<text x="555.0" y="1155.0" text-anchor="middle" class="t" font-size="12">Backstops: SSE heartbeat lost 10 s → finalize; session_minutes deadline; 3 h GPU backstop.</text>
+<path d="M410,866.0 h 12 v 18 h -8" fill="none" class="edge" marker-end="url(#ah)"/>
+<rect x="428.0" y="862.0" width="277.7" height="20.0" rx="3" class="plate"/>
+<text x="432.0" y="877.0" text-anchor="start" class="t" font-size="12">metered tick (60 s) until /end or ceiling</text>
+<rect x="403.2" y="916.0" width="303.6" height="34.0" rx="3" class="plate"/>
+<text x="555.0" y="931.0" text-anchor="middle" class="t" font-size="12">aclose(): remove_participant(avatar)</text>
+<text x="555.0" y="945.0" text-anchor="middle" class="t" font-size="12">(LiveKit base class, developer's credentials)</text>
+<line x1="120.0" y1="959.0" x2="987.0" y2="959.0" class="edge" marker-end="url(#ah)"/>
+<rect x="90.5" y="983.0" width="349.0" height="20.0" rx="3" class="plate"/>
+<text x="265.0" y="998.0" text-anchor="middle" class="t" font-size="12">POST /v1/avatar_sessions/{id}/end → finalize billing</text>
+<line x1="120.0" y1="1012.0" x2="407.0" y2="1012.0" class="edge" marker-end="url(#ah)"/>
+<rect x="80" y="1036" width="950" height="44" rx="3" class="note"/>
+<text x="555.0" y="1049.0" text-anchor="middle" class="t" font-size="12">Ungraceful agent shutdown: the agent participant drops, the worker leaves on its own (publish-on-behalf rule);</text>
+<text x="555.0" y="1063.0" text-anchor="middle" class="t" font-size="12">no /end arrives, so the session bills to its ceiling. GPU backstop: 3 h.</text>
 </svg>
