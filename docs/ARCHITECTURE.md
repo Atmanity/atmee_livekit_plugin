@@ -4,7 +4,7 @@ arc42 architecture documentation
 
 A developer brings their own LiveKit voice agent; Atmee renders a talking-head avatar into their room from a single portrait and bills per minute. This page documents the architecture in the twelve arc42 sections, kept deliberately short.
 
-Status: M1 shipped, M2 / M3 planned · Date: 2026-09-10 · Repos: session_service · avatar_service · supabase-edge-functions · livekit-plugins-atmee
+Status: M1 shipped, M0 / M2 / M3 planned · Date: 2026-09-10 · Repos: session_service · avatar_service · supabase-edge-functions · livekit-plugins-atmee
 
 The same document is published as a Claude artifact (HTML, both themes) and as `docs/architecture.html` in this repo.
 
@@ -30,18 +30,18 @@ await session.start(agent=..., room=ctx.room)        # agent TTS → avatar vide
 |---|---|
 | Simple to adopt | Three lines in an agent plus one create call. No zip bundles, no voice sample, no persona for the render-only case. |
 | Least privilege | Atmee never holds the developer's LiveKit credentials. It receives a token for one room, one identity, one session. |
-| Correct metering | Every rendered minute is billed to the right account, in reserve or metered mode; the meter stops when the plugin ends the session. |
-| No change to the renderer | The GPU service already speaks the LiveKit avatar protocol and is used exactly as it is. |
+| Correct metering | Every rendered minute is billed to the right account, in reserve or metered mode; the meter stops when the worker reports that the render ended. |
+| Minimal change to the renderer | The GPU service already speaks the LiveKit avatar protocol. It gains one thing: a completion callback to session_service when a render ends. |
 
 
 ## 2. Constraints
 
 | Constraint | Consequence |
 |---|---|
-| Each developer uses their own LiveKit project | Atmee cannot observe the room from outside. Session end is reported by the plugin; the worker itself stops on LiveKit's own rules (agent left, room closed, participant removed). |
+| Each developer uses their own LiveKit project | Atmee cannot observe the room from outside. The GPU worker, which is inside the room, stops on LiveKit's own rules (agent left, room closed, participant removed) and reports the end to session_service. |
 | livekit-agents 1.x avatar protocol | Audio travels over the `lk.audio_stream` data stream; the avatar publishes with the `lk.publish_on_behalf` attribute so LiveKit's UI components attribute its video to the agent. |
 | Shared GPU pool | The same pods serve Atmee's own product. Capacity is admission-controlled; a full pool answers 503. |
-| avatar_service is not changed | No new endpoints, no auth changes, no stream changes. `/lk_avatar` is called exactly as it exists today. |
+| avatar_service changes in one place | No new endpoints, no auth changes, no stream changes. `/lk_avatar` accepts `session_id` and `callback_url` and posts a completion callback from its existing teardown path. |
 | Python only for the first release | Package `livekit-plugins-atmee`, import `livekit.plugins.atmee`, Node later. |
 | Public API convention | All external calls go through session_service with `X-Api-Key` and the existing `ApiErrorResponse` error shape. |
 
@@ -60,7 +60,8 @@ await session.start(agent=..., room=ctx.room)        # agent TTS → avatar vide
 | `POST /v1/avatars` | developer → Atmee | Create an avatar from an image (multipart `file` + `name`, zip, or JSON with URLs). Voice optional. |
 | `POST /v1/avatars/{avatarId}/avatar_sessions` | plugin → Atmee | Start rendering this avatar into a room: `livekitUrl`, `livekitToken` (a LiveKit access token for that room). Returns 202 with the session id. |
 | `POST /v1/avatar_sessions/{id}/end` | plugin → Atmee | Stop the render and finalize billing. |
-| `POST /lk_avatar` (SSE) | session_service → GPU worker | Starts the render; the stream carries the start handshake (`initializing`, `avatar_joined`, `user_joined`) and then closes. In-cluster only, unchanged. |
+| `POST /lk_avatar` (SSE) | session_service → GPU worker | Starts the render; the stream carries the start handshake (`initializing`, `avatar_joined`, `user_joined`) and then closes. Carries `session_id` and `callback_url`. In-cluster only. |
+| Completion callback | GPU worker → session_service | `POST {callback_url}` with `{session_id, ended_at, reason}` when the render stops; shared-secret bearer, in-cluster only. |
 | LiveKit data stream `lk.audio_stream` | plugin → GPU worker | 16 kHz PCM segments; `lk.clear_buffer` and `lk.playback_finished` RPCs for interruption. |
 | LiveKit tracks `avatar_video`, `avatar_audio` | GPU worker → room | 512×512 at 25 fps, VP9 SVC, published on behalf of the agent. |
 
@@ -70,7 +71,7 @@ await session.start(agent=..., room=ctx.room)        # agent TTS → avatar vide
 - **Reuse the renderer as it is.** The GPU service's `/lk_avatar` already joins any LiveKit URL with a given token and renders from data-stream audio. The plugin is a thin client of it, through session_service.
 - **Work like other avatar plugins for the developer.** Same `AvatarSession.start()` shape, same LiveKit token minting inside the agent process, same publish-on-behalf identity mapping.
 - **One public entry point.** session_service authenticates the API key, checks avatar ownership, reserves and bills the session, and is the only thing that talks to the GPU pool.
-- **Lifecycle like other avatar plugins.** On shutdown the plugin removes the avatar participant (LiveKit's base `AvatarSession` already does this) and calls `/end`. If the agent dies, its participant drops and the worker leaves on its own; if the avatar drops, the plugin notices and calls `/end`. No orchestrator-to-worker channel.
+- **Lifecycle like other avatar providers: the worker reports to the backend.** The plugin only leaves the room (LiveKit's base `AvatarSession` already removes the avatar participant). The GPU worker sees every end from inside the room, agent left, room closed, participant removed, and posts a completion callback to session_service, which finalizes billing. The plugin's `/end` is an optional explicit stop.
 - **One-shot avatar creation.** An image alone creates a render-only avatar that is ready immediately. Adding a voice later makes it conversational.
 
 
@@ -78,25 +79,25 @@ await session.start(agent=..., room=ctx.room)        # agent TTS → avatar vide
 
 | Block | Responsibility | Status |
 |---|---|---|
-| `livekit.plugins.atmee` AvatarSession · AtmeeAPI | Mints the LiveKit room token, starts the avatar session, swaps the agent's audio output for `DataStreamAudioOutput`, watches the avatar participant, and on shutdown removes it and calls `/end`. `AtmeeAPI` also creates avatars. | `new` |
+| `livekit.plugins.atmee` AvatarSession · AtmeeAPI | Mints the LiveKit room token, starts the avatar session, swaps the agent's audio output for `DataStreamAudioOutput`, and on shutdown removes the avatar participant. `/end` is available as an explicit stop. `AtmeeAPI` also creates avatars. | `new` |
 | session_service · `internal/app/avatars` | Avatar Import API: create (image, zip, JSON), replace parts, status. Writes the render config for voiceless avatars. | `shipped #142` |
-| session_service · `internal/app/video/render` | Avatar sessions: token pre-flight, reservation, launch via `/lk_avatar`, metered ticks, finalize on `/end` or at the ceiling. | `new` |
+| session_service · `internal/app/video/render` | Avatar sessions: token pre-flight, reservation, launch via `/lk_avatar`, metered ticks, finalize on the worker's completion callback (or `/end`, or the ceiling). | `new` |
 | session_service · adapters | Supabase RPCs, avatar launcher (SSE client), LiveKit token parsing. | `exists` + `token_claims` |
-| avatar_service · `/lk_avatar` | Stateless GPU worker: joins the room, renders FLOAT talking and listening frames from the audio stream, publishes tracks, leaves when the agent leaves or the room closes. | `exists` |
+| avatar_service · `/lk_avatar` | Stateless GPU worker: joins the room, renders FLOAT talking and listening frames from the audio stream, publishes tracks, leaves when the agent leaves or the room closes, and reports the end. | `exists` + `callback` |
 | Supabase | `avatars` (config, kind), `sessions`, billing ledger and RPCs (`create_embed_session`, metered ticks, finalize). | `shipped #583` |
 
 
 ## 6. Runtime view
 
-![One avatar session. The 202 returns as soon as the worker acknowledges; the plugin waits for the video track itself. The plugin ends the session; LiveKit's participant rules cover everything else.](diagrams/session.svg)
+![One avatar session. The 202 returns as soon as the worker acknowledges; the plugin waits for the video track itself. The worker reports the end to session_service, as other avatar providers' workers do to their backends.](diagrams/session.svg)
 
-*One avatar session. The 202 returns as soon as the worker acknowledges; the plugin waits for the video track itself. The plugin ends the session; LiveKit's participant rules cover everything else.*
+*One avatar session. The 202 returns as soon as the worker acknowledges; the plugin waits for the video track itself. The worker reports the end to session_service, as other avatar providers' workers do to their backends.*
 
 ![Avatar creation from a portrait. Nothing is built asynchronously: the render config is written at once, so the avatar is usable immediately.](diagrams/creation.svg)
 
 *Avatar creation from a portrait. Nothing is built asynchronously: the render config is written at once, so the avatar is usable immediately.*
 
-> Ungraceful shutdown: if the agent process dies without running its shutdown callbacks, its participant drops and the worker leaves the room on its own, but no `/end` arrives, so the session bills to its ceiling. That is the accepted cost of having no orchestrator-to-worker channel; the 3 hour GPU backstop is the last resort.
+> Ungraceful agent shutdown: the agent participant drops, the worker leaves the room on its own and posts the completion callback, so billing stops within seconds even though no code ran on the developer's side. The ceiling timer remains for the one case the worker cannot report: the GPU pod itself dying.
 
 
 ## 7. Deployment view
@@ -111,7 +112,7 @@ await session.start(agent=..., room=ctx.room)        # agent TTS → avatar vide
 | Concept | Approach |
 |---|---|
 | Authentication | Developer → Atmee: `X-Api-Key` (`sk_atmee_…`) with scopes `sessions`, `avatars:read`, `avatars:write`. Atmee worker → developer's room: a LiveKit access token (a JWT signed with the developer's LiveKit API secret), minted by the plugin and scoped to one room and one identity. session_service → GPU pods: in-cluster network trust, no bearer token. |
-| Billing | `create_embed_session` returns the account's mode. Reserve: lock the ceiling, refund the rest. Metered: a tick every 60 s charges the delta, stops with a grace period when credits run out. Billing starts when both the avatar and the agent are present and stops on `/end`, or at the session ceiling if no end arrives. |
+| Billing | `create_embed_session` returns the account's mode. Reserve: lock the ceiling, refund the rest. Metered: a tick every 60 s charges the delta, stops with a grace period when credits run out. Billing starts when both the avatar and the agent are present and stops on the worker's completion callback (or an explicit `/end`), or at the session ceiling if neither arrives. |
 | Avatar kinds | `render_only` has a portrait and nothing else, is ready at once, cannot chat. `conversational` has a voice and persona and is built by the creator-studio graph. `PUT /voice` promotes one to the other. |
 | Error model | Every error is `{error, message}`. Codes on create: `invalid_upload`, `invalid_zip`, `invalid_manifest`, `invalid_url`, `fetch_failed`. On avatar sessions: `invalid_livekit_token`, `missing_publish_on_behalf`, `avatar_not_renderable`, 503 with `Retry-After` when the pool is full. |
 | Observability | Outbound calls are instrumented per dependency (`avatar_service`, `supabase`) with duration histograms and OpenTelemetry spans; the GPU service exports Prometheus metrics for busy budget and sessions. |
@@ -123,7 +124,7 @@ await session.start(agent=..., room=ctx.room)        # agent TTS → avatar vide
 | Decision | Chosen | Instead of | Why |
 |---|---|---|---|
 | How the worker enters the room | Room-scoped LiveKit access token (JWT) minted by the plugin | Handing Atmee the developer's LiveKit API key | The key is project-wide admin. A token is one room, one identity, expiring, and it is the only place `publish_on_behalf` can be set. |
-| Lifecycle signal | Plugin ends the session; LiveKit participant semantics for the worker | A held-open SSE stream from the GPU worker, or a plugin heartbeat | Same pattern as every other LiveKit avatar plugin: the base class already removes the avatar on close, and the worker already stops when its agent leaves. Costs nothing in avatar_service. Accepted cost: an ungraceful agent shutdown bills to the ceiling. |
+| Lifecycle signal | Worker → backend completion callback | A held-open SSE stream, a plugin heartbeat, or plugin-only `/end` | The industry pattern: the worker is inside the room and is the only party that always knows when the render ended, including after a hard-killed agent. A callback is smaller than a held-open stream and trusts no client. Costs one contained change in avatar_service. |
 | Avatar creation | One call, image inline or by URL, voice optional | Create a shell, then upload the image | A portrait is small and belongs to one avatar; two steps add a draft state to every consumer. Other avatar plugins take the same one-call approach for images. |
 | Resource model | One avatar resource with `kind` | Separate face and persona resources, as some other avatar providers do | Same expressiveness, simpler API, and a natural upgrade path by adding a voice. |
 | Creation in the plugin | `AtmeeAPI.create_avatar` ships in the plugin | Runtime-only plugin plus a separate SDK | One install, one key. A future SDK can be depended on and re-exported without breaking callers. |
@@ -137,8 +138,8 @@ await session.start(agent=..., room=ctx.room)        # agent TTS → avatar vide
 | Scenario | Expected behaviour |
 |---|---|
 | Developer starts a session on a warm pod | 202 within about two seconds; first video frame within a few seconds once the model is primed. |
-| Agent process crashes | The agent participant drops and the worker leaves the room within seconds. No `/end` arrives, so billing runs to the session ceiling. |
-| GPU pod dies mid-session | The avatar participant drops; the plugin sees it and calls `/end`, so billing stops. The developer can start a new session. |
+| Agent process crashes | The agent participant drops, the worker leaves the room within seconds and posts the completion callback; billing stops. |
+| GPU pod dies mid-session | No callback can be sent. The plugin sees the avatar participant drop and may call `/end`; otherwise the ceiling timer finalizes the session. The developer can start a new session. |
 | GPU pool is full | Envoy retries 503 across pods for a few seconds, then the API answers 503 with `Retry-After`. Nothing is reserved. |
 | Token without `publish_on_behalf` | 400 before any GPU work. A token that is well-formed but forged fails as `AVATAR_DID_NOT_JOIN` after the join timeout. |
 | Portrait without a usable face | Creation succeeds; the first render fails with an error event. Known gap, see 11. |
@@ -146,7 +147,7 @@ await session.start(agent=..., room=ctx.room)        # agent TTS → avatar vide
 
 ## 11. Risks and technical debt
 
-- **Ungraceful shutdown bills the ceiling.** Without a worker-to-backend channel, a SIGKILLed agent pays for its full session ceiling. Bounded, and the same as a reservation-mode session today, but not what metered billing suggests.
+- **Callback delivery.** If the GPU pod dies before it can report, billing falls back to the ceiling timer or the plugin's `/end`. The callback is retried a few times on transient failure.
 - **Production lag.** The image-only create is deployed to production session_service, but the database RPC it calls only reaches production with the next `dev` to `main` release. Until then image-only creates return 500 there. Staging has both halves.
 - **No face validation.** Bad portraits are discovered late. A detector shared with the renderer exists in avatar_service and could back a check later.
 - **Studio shows render-only avatars as still building.** Its readiness comes from the build graph, which never completes without a voice.

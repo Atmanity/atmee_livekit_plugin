@@ -118,7 +118,7 @@ def context():
     b.append(arrow(670, 175, 696, 175))
     b.append(multitext(683, 224, ["reserve", "tick", "finalize"], size=11, cls="tm", lh=12))
     b.append(arrow(585, 200, 585, 296))
-    b.append(multitext(593, 246, ["POST /lk_avatar (in-cluster, unchanged)", "response reports the start events, then closes"], anchor="start", size=11.5, cls="tm", lh=14))
+    b.append(multitext(593, 246, ["POST /lk_avatar (in-cluster)", "start events; end reported via callback"], anchor="start", size=11.5, cls="tm", lh=14))
     b.append(arrow(650, 322, 676, 322))
     b.append(arrow(690, 360, 406, 336))
     b.append(multitext(560, 386, ["joins as atmee-avatar-agent", "publishes video + audio"], size=11.5, cls="tm", lh=14))
@@ -163,7 +163,7 @@ SESSION = sequence(
         ("s", "P", ["mint LiveKit access token (JWT):", "kind=agent, identity=atmee-avatar-agent,", "lk.publish_on_behalf=agent"]),
         ("m", "P", "S", ["POST /v1/avatars/{avatarId}/avatar_sessions"]),
         ("s", "S", ["parse token → room, identity", "reserve session (billing_mode)", "load + presign avatar config"]),
-        ("m", "S", "G", ["POST /lk_avatar {url, token, config}", "(unchanged)"]),
+        ("m", "S", "G", ["POST /lk_avatar {url, token, config,", "session_id, callback_url}"]),
         ("m", "G", "S", ["SSE initializing"], True),
         ("m", "S", "P", ["202 {sessionId, avatarParticipantIdentity}"], True),
         ("s", "P", ["output.replace_audio_tail(DataStreamAudioOutput)"]),
@@ -177,11 +177,12 @@ SESSION = sequence(
         ("s", "S", ["metered tick (60 s) until /end or ceiling"]),
         ("E",),
         ("m", "P", "R", ["aclose(): remove_participant(avatar)", "(LiveKit base class, developer's credentials)"]),
-        ("m", "P", "S", ["POST /v1/avatar_sessions/{id}/end → finalize billing"]),
-        ("N", ["Ungraceful agent shutdown: the agent participant drops, the worker leaves on its own (publish-on-behalf rule);",
-               "no /end arrives, so the session bills to its ceiling. GPU backstop: 3 h."]),
+        ("m", "G", "S", ["POST callback_url {session_id, ended_at, reason}", "worker → backend, like other avatar providers"]),
+        ("s", "S", ["finalize billing"]),
+        ("N", ["The worker reports every end it can observe: agent left, room closed, participant removed, render error.",
+               "Plugin /end is an optional explicit stop. Ceiling timer covers a GPU pod that dies before reporting."]),
     ],
-    "One avatar session from token minting to finalize; the plugin ends it, LiveKit participant semantics cover the rest.",
+    "One avatar session from token minting to finalize; the GPU worker reports the end to session_service.",
 )
 
 CREATION = sequence(
