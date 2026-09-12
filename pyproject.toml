@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "livekit-plugins-atmee"
+dynamic = ["version"]
+description = "LiveKit Agents plugin for Atmee avatars: render a talking-head avatar from a single portrait into your agent's room"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "Atmanity", email = "hello@atmee.ai" }]
+keywords = ["webrtc", "realtime", "audio", "video", "livekit", "avatar", "atmee"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = [
+    "livekit-agents>=1.6.8,<2",
+    "livekit-api>=1.0",
+    "aiohttp>=3.9",
+]
+
+[project.urls]
+Documentation = "https://github.com/Atmanity/atmee_livekit_plugin#readme"
+Website = "https://atmee.ai"
+Source = "https://github.com/Atmanity/atmee_livekit_plugin"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.11",
+    "mypy>=1.13",
+]
+
+[tool.hatch.version]
+path = "livekit/plugins/atmee/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["livekit"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/livekit", "/README.md", "/LICENSE"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["docs", "*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["livekit"]
+
+[tool.mypy]
+strict = true
+packages = ["livekit.plugins.atmee"]
+namespace_packages = true
+explicit_package_bases = true
+ignore_missing_imports = true

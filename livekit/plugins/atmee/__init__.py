@@ -1,0 +1,63 @@
+# Copyright 2026 Atmanity
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Atmee avatar plugin for LiveKit Agents.
+
+Bring your own LiveKit voice agent; Atmee renders a talking-head avatar from a
+single portrait into your room and bills per minute::
+
+    from livekit.plugins import atmee
+
+    avatar_id = await atmee.AtmeeAPI().create_avatar(name="Val", image="portrait.jpg")
+
+    avatar = atmee.AvatarSession(avatar_id=avatar_id)   # ATMEE_API_KEY in the environment
+    await avatar.start(session, room=ctx.room)
+    await session.start(agent=..., room=ctx.room)       # the agent's TTS drives the avatar's video
+
+See https://github.com/Atmanity/atmee_livekit_plugin for the architecture notes.
+"""
+
+from .api import (
+    AtmeeAPI,
+    AtmeeAvatarNotReadyError,
+    AtmeeException,
+    AtmeeNoCapacityError,
+    AvatarInfo,
+    AvatarSessionInfo,
+)
+from .avatar import AvatarSession
+from .version import __version__
+
+__all__ = [
+    "AtmeeAPI",
+    "AtmeeAvatarNotReadyError",
+    "AtmeeException",
+    "AtmeeNoCapacityError",
+    "AvatarInfo",
+    "AvatarSession",
+    "AvatarSessionInfo",
+    "__version__",
+]
+
+from livekit.agents import Plugin
+
+from .log import logger
+
+
+class AtmeePlugin(Plugin):
+    def __init__(self) -> None:
+        super().__init__(__name__, __version__, __package__, logger)
+
+
+Plugin.register_plugin(AtmeePlugin())
