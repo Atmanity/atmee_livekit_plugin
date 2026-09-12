@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [project.urls]
-Documentation = "https://github.com/Atmanity/atmee_livekit_plugin/blob/main/docs/ARCHITECTURE.md"
+Documentation = "https://github.com/Atmanity/atmee_livekit_plugin#readme"
 Website = "https://atmee.ai"
 Source = "https://github.com/Atmanity/atmee_livekit_plugin"
 

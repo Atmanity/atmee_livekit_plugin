@@ -112,12 +112,32 @@ has no portrait yet).
 - [`examples/create_avatar.py`](examples/create_avatar.py) — create an avatar
   from a portrait and print its id.
 
-## Documentation
+## How it works
 
-- [Architecture (arc42)](docs/ARCHITECTURE.md) — how the plugin, the Atmee API
-  and the rendering workers fit together, with diagrams.
-- [docs/architecture.html](docs/architecture.html) — the same document as a
-  self-contained page.
+```
+your agent (livekit-agents) ── plugin ──► Atmee API        (X-Api-Key, https)
+        │                                     │
+        │  audio over lk.audio_stream          ▼
+        └──────────────► your LiveKit room ◄── Atmee rendering worker
+                                              joins as atmee-avatar-agent,
+                                              publishes video + audio
+```
+
+1. `AvatarSession.start()` mints a LiveKit access token for the avatar
+   participant with **your** LiveKit credentials: identity
+   `atmee-avatar-agent`, `kind: agent`, a `roomJoin` grant for your room,
+   and the attribute `lk.publish_on_behalf` set to your agent's identity.
+   Atmee receives only that token, never your secret.
+2. It calls `POST /v1/avatars/{avatarId}/avatar_sessions` with your LiveKit
+   URL and the token. Atmee reserves a session, starts a rendering worker,
+   and answers as soon as the worker acknowledged the start.
+3. The worker joins your room with the token, waits for your agent, receives
+   its audio over the LiveKit data stream (`lk.audio_stream`, 16 kHz PCM, the
+   standard `DataStreamAudioOutput`), and publishes lip-synced video and
+   audio on behalf of your agent.
+4. When your agent leaves or the room closes, the worker notices from inside
+   the room and reports the end to Atmee, which stops billing. `aclose()`
+   removes the avatar participant and ends the session explicitly as well.
 
 ## Development
 
