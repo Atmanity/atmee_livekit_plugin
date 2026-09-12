@@ -45,6 +45,12 @@ DEFAULT_API_URL = "https://api.atmanity.us"
 
 WaitFor = Literal["initializing", "avatar_joined"]
 
+# Overall budget of the start call: the worker acknowledges within seconds, but
+# waiting for the avatar to join covers model priming on a cold pod (the
+# server's own join timeout is 90 s) plus the room join.
+_START_TOTAL_TIMEOUT: dict[str, float] = {"initializing": 60.0, "avatar_joined": 180.0}
+_DEFAULT_TOTAL_TIMEOUT = 120.0
+
 
 class AtmeeException(Exception):
     """An Atmee API call failed.
@@ -195,8 +201,17 @@ class AtmeeAPI:
         params: dict[str, str] | None = (
             {"waitFor": wait_for} if wait_for != "initializing" else None
         )
+        # Never retried: the POST reserves and bills a session as soon as the
+        # server accepts it, so a retry after a timeout or a 5xx could open a
+        # second render for the same room. The caller decides whether to try
+        # again (the AvatarSession does not).
         data = await self._request(
-            "POST", f"/v1/avatars/{avatar_id}/avatar_sessions", json=payload, params=params
+            "POST",
+            f"/v1/avatars/{avatar_id}/avatar_sessions",
+            json=payload,
+            params=params,
+            retry=False,
+            total_timeout=_START_TOTAL_TIMEOUT[wait_for],
         )
         return AvatarSessionInfo(
             session_id=str(data.get("sessionId", "")),
@@ -331,10 +346,12 @@ class AtmeeAPI:
         data: aiohttp.FormData | None = None,
         params: dict[str, str] | None = None,
         retry: bool = True,
+        total_timeout: float = _DEFAULT_TOTAL_TIMEOUT,
     ) -> dict[str, Any]:
         """One API call with the plugin's retry policy: transport errors and
         5xx answers are retried ``conn_options.max_retry`` times; a 503
-        ``no_capacity`` and every 4xx are final."""
+        ``no_capacity`` and every 4xx are final. ``retry=False`` for calls
+        that are not idempotent (creating a session or an avatar)."""
         attempts = max(1, self._conn_options.max_retry) if retry else 1
         last_error: Exception | None = None
         for attempt in range(attempts):
@@ -347,7 +364,7 @@ class AtmeeAPI:
                     data=data,
                     params=params,
                     timeout=aiohttp.ClientTimeout(
-                        sock_connect=self._conn_options.timeout, total=120
+                        sock_connect=self._conn_options.timeout, total=total_timeout
                     ),
                 ) as response:
                     if response.ok:

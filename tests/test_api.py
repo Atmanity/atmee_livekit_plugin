@@ -128,24 +128,39 @@ async def test_not_renderable_is_typed(
         await api.create_avatar_session(AVATAR_ID, livekit_url="wss://x", livekit_token="t")
 
 
-async def test_5xx_is_retried_then_raised(
+async def test_session_create_is_never_retried(
     fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
 ) -> None:
+    # The POST bills a session once the server accepts it; a retry after a
+    # timeout or 5xx could open a second render, so it is final either way.
     fake_atmee.script(
         "POST", SESSIONS_PATH, 502, {"error": "avatar_start_failed", "message": "no face"}
     )
-    fake_atmee.script("POST", SESSIONS_PATH, 500, body="oops")
     fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
     api = AtmeeAPI(session=http_session, conn_options=FAST)
-    info = await api.create_avatar_session(AVATAR_ID, livekit_url="wss://x", livekit_token="t")
-    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 3
-    assert info.session_id == SESSION_ID
-
-    fake_atmee.script("POST", SESSIONS_PATH, 500, body="down", times=3)
     with pytest.raises(AtmeeException) as exc:
         await api.create_avatar_session(AVATAR_ID, livekit_url="wss://x", livekit_token="t")
+    assert exc.value.status_code == 502 and exc.value.code == "avatar_start_failed"
+    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 1
+
+
+async def test_idempotent_calls_retry_5xx_then_raise(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    get_path = f"/v1/avatar_sessions/{SESSION_ID}"
+    fake_atmee.script("GET", get_path, 502, body="bad gateway")
+    fake_atmee.script("GET", get_path, 500, body="oops")
+    fake_atmee.script("GET", get_path, 200, {"sessionId": SESSION_ID, "status": "active"})
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    got = await api.get_avatar_session(SESSION_ID)
+    assert len(fake_atmee.calls("GET", get_path)) == 3
+    assert got["status"] == "active"
+
+    fake_atmee.script("GET", get_path, 500, body="down", times=3)
+    with pytest.raises(AtmeeException) as exc:
+        await api.get_avatar_session(SESSION_ID)
     assert exc.value.status_code == 500
-    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 6
+    assert len(fake_atmee.calls("GET", get_path)) == 6
 
 
 async def test_end_and_get_avatar_session(
