@@ -90,6 +90,9 @@ minute. It stops when
   seconds),
 - `aclose()` runs — registered automatically as a job shutdown callback; it
   ends the session and removes the avatar participant from your room,
+- the rendering worker itself dies or loses contact: it proves it is alive
+  once a minute, and a session silent for a few minutes is closed and billed
+  only up to the last proof,
 - or the session reaches `max_duration_seconds`.
 
 ### Errors
