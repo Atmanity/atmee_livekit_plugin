@@ -111,6 +111,18 @@ has no portrait yet).
   LiveKit Agents Playground.
 - [`examples/create_avatar.py`](examples/create_avatar.py) — create an avatar
   from a portrait and print its id.
+- [`tests/test_live_agent.py`](tests/test_live_agent.py) — a manual live
+  smoke test: a real GPT voice agent (OpenAI LLM + TTS, silero VAD) with an
+  Atmee avatar in a real LiveKit room, asserting the avatar joins, publishes
+  video, and that its agent-driven audio flows. Skipped unless
+  `RUN_LIVE_ATMEE_AGENT=1` and the credentials are set:
+
+  ```bash
+  RUN_LIVE_ATMEE_AGENT=1 ATMEE_API_KEY=… ATMEE_AVATAR_ID=… \
+  LIVEKIT_URL=… LIVEKIT_API_KEY=… LIVEKIT_API_SECRET=… OPENAI_API_KEY=… \
+  uv run --group dev --with "livekit-agents[openai,silero]" \
+      pytest tests/test_live_agent.py -m live -s
+  ```
 
 ## How it works
 

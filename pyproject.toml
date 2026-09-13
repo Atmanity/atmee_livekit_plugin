@@ -55,6 +55,9 @@ include = ["/livekit", "/README.md", "/LICENSE"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "live: end-to-end test against real LiveKit + Atmee + OpenAI; run manually with RUN_LIVE_ATMEE_AGENT=1",
+]
 
 [tool.ruff]
 line-length = 100
