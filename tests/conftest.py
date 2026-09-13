@@ -117,7 +117,11 @@ async def fake_atmee(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[FakeAtmee
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _env(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The live test (marker "live") talks to real LiveKit/Atmee/OpenAI, so it
+    # must keep the real environment. Every other test wants the offline stubs.
+    if request.node.get_closest_marker("live"):
+        return
     monkeypatch.setenv("ATMEE_API_KEY", API_KEY)
     monkeypatch.setenv("ATMEE_API_URL", "https://api.unreachable.test")
     monkeypatch.setenv("LIVEKIT_URL", "wss://dev.livekit.cloud")

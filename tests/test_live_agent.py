@@ -18,16 +18,18 @@ is present, so CI and ``uv run pytest`` stay offline and fast. Run it by hand::
         pytest tests/test_live_agent.py -m live -s
 
 ``AVATAR_TEST_LLM_MODEL`` overrides the model (default ``gpt-4o-mini``).
+
+Note: the autouse ``_env`` fixture in conftest deliberately does NOT stub the
+environment for ``live``-marked tests, so this reads the real credentials.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 
 import pytest
-
-pytestmark = pytest.mark.live
 
 REQUIRED_ENV = (
     "ATMEE_API_KEY",
@@ -77,9 +79,22 @@ async def test_gpt_agent_drives_the_avatar() -> None:
 
     async with utils.http_context.open():
         room = rtc.Room()
-        video_seen = utils.aio.Event()  # avatar published video
+        video_seen = asyncio.Event()
         audio_frames = 0
+        audio_tasks: set[asyncio.Task[None]] = set()
 
+        async def _drain_audio(track: rtc.Track) -> None:
+            nonlocal audio_frames
+            stream = rtc.AudioStream(track)
+            try:
+                async for _frame in stream:
+                    audio_frames += 1
+            finally:
+                await stream.aclose()
+
+        # Fire on the avatar's tracks as they are subscribed — this is what
+        # makes the audio counter robust: it starts only once the track
+        # exists, unlike polling the participant before it has joined.
         @room.on("track_subscribed")
         def _on_track(
             track: rtc.Track, pub: rtc.RemoteTrackPublication, p: rtc.RemoteParticipant
@@ -88,6 +103,10 @@ async def test_gpt_agent_drives_the_avatar() -> None:
                 return
             if track.kind == rtc.TrackKind.KIND_VIDEO:
                 video_seen.set()
+            elif track.kind == rtc.TrackKind.KIND_AUDIO:
+                t = asyncio.create_task(_drain_audio(track))
+                audio_tasks.add(t)
+                t.add_done_callback(audio_tasks.discard)
 
         await room.connect(os.environ["LIVEKIT_URL"], token, rtc.RoomOptions(auto_subscribe=True))
 
@@ -112,30 +131,20 @@ async def test_gpt_agent_drives_the_avatar() -> None:
                 room=room,
             )
 
-            # Subscribe to the avatar's audio track so we can count frames the
-            # agent's speech produced, and make the agent speak.
-            async def _count_audio() -> None:
-                nonlocal audio_frames
-                async for _ in _avatar_audio_frames(room):
-                    audio_frames += 1
+            await asyncio.wait_for(video_seen.wait(), timeout=150)
+            print(f"avatar video after {time.time() - t0:.1f}s (session {avatar.session_id})")
 
-            audio_task = utils.aio.create_task(_count_audio())
-            try:
-                await utils.aio.wait_for(video_seen.wait(), timeout=150)
-                assert video_seen.is_set(), "avatar never published a video track"
-                print(f"avatar video after {time.time() - t0:.1f}s (session {avatar.session_id})")
-
-                await session.generate_reply(instructions="Greet the user warmly.")
-                # Give the rendered audio a few seconds to flow through.
-                for _ in range(20):
-                    if audio_frames > 0:
-                        break
-                    await _sleep(0.5)
-                assert audio_frames > 0, "no avatar audio frames after the agent replied"
-                print(f"avatar audio frames observed: {audio_frames}")
-            finally:
-                await utils.aio.cancel_and_wait(audio_task)
+            await session.generate_reply(instructions="Greet the user warmly.")
+            # Let the rendered audio flow for a few seconds.
+            for _ in range(30):
+                if audio_frames > 0:
+                    break
+                await asyncio.sleep(0.5)
+            assert audio_frames > 0, "no avatar audio frames after the agent replied"
+            print(f"avatar audio frames observed: {audio_frames}")
         finally:
+            for t in list(audio_tasks):
+                await utils.aio.cancel_and_wait(t)
             await avatar.aclose()
             await session.aclose()
             await room.disconnect()
@@ -144,27 +153,3 @@ async def test_gpt_agent_drives_the_avatar() -> None:
         status = await avatar.api.get_avatar_session(avatar.session_id)
         assert status.get("status") in ("completed", "failed"), status
         print(f"final Atmee status: {status.get('status')}")
-
-
-async def _avatar_audio_frames(room):  # type: ignore[no-untyped-def]
-    from livekit import rtc
-
-    for participant in room.remote_participants.values():
-        if participant.identity != "atmee-avatar-agent":
-            continue
-        for pub in participant.track_publications.values():
-            track = pub.track
-            if track is not None and track.kind == rtc.TrackKind.KIND_AUDIO:
-                stream = rtc.AudioStream(track)
-                async for _event in stream:
-                    yield _event
-                return
-    # No audio track yet; yield nothing (the caller polls audio_frames).
-    return
-    yield  # pragma: no cover - makes this an async generator
-
-
-async def _sleep(seconds: float) -> None:
-    import asyncio
-
-    await asyncio.sleep(seconds)
