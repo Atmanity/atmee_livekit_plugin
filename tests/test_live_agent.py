@@ -25,6 +25,7 @@ environment for ``live``-marked tests, so this reads the real credentials.
 
 from __future__ import annotations
 
+import array
 import asyncio
 import os
 import time
@@ -80,15 +81,23 @@ async def test_gpt_agent_drives_the_avatar() -> None:
     async with utils.http_context.open():
         room = rtc.Room()
         video_seen = asyncio.Event()
-        audio_frames = 0
+        # A published audio track emits frames continuously, including silence,
+        # so a raw frame count proves nothing. Count only "voiced" frames —
+        # peak amplitude above a small floor — and require them to appear after
+        # the agent replies. VOICED_FLOOR is well above line noise, well below
+        # speech (int16 full scale is 32767).
+        voiced_frames = 0
         audio_tasks: set[asyncio.Task[None]] = set()
+        VOICED_FLOOR = 500
 
         async def _drain_audio(track: rtc.Track) -> None:
-            nonlocal audio_frames
+            nonlocal voiced_frames
             stream = rtc.AudioStream(track)
             try:
-                async for _frame in stream:
-                    audio_frames += 1
+                async for event in stream:
+                    samples = array.array("h", bytes(event.frame.data))
+                    if samples and max(abs(s) for s in samples) > VOICED_FLOOR:
+                        voiced_frames += 1
             finally:
                 await stream.aclose()
 
@@ -134,14 +143,21 @@ async def test_gpt_agent_drives_the_avatar() -> None:
             await asyncio.wait_for(video_seen.wait(), timeout=150)
             print(f"avatar video after {time.time() - t0:.1f}s (session {avatar.session_id})")
 
+            # Only speech produced from here on should count, so start from the
+            # voiced frames seen so far (idle rendering should be silence, but
+            # this makes the check independent of that).
+            voiced_before = voiced_frames
             await session.generate_reply(instructions="Greet the user warmly.")
-            # Let the rendered audio flow for a few seconds.
-            for _ in range(30):
-                if audio_frames > 0:
+            # Wait for the reply's speech to reach the avatar's audio track.
+            for _ in range(60):
+                if voiced_frames > voiced_before:
                     break
                 await asyncio.sleep(0.5)
-            assert audio_frames > 0, "no avatar audio frames after the agent replied"
-            print(f"avatar audio frames observed: {audio_frames}")
+            assert voiced_frames > voiced_before, (
+                "no voiced avatar audio after the agent replied "
+                f"(voiced_before={voiced_before}, voiced_after={voiced_frames})"
+            )
+            print(f"voiced avatar audio frames from the reply: {voiced_frames - voiced_before}")
         finally:
             for t in list(audio_tasks):
                 await utils.aio.cancel_and_wait(t)
