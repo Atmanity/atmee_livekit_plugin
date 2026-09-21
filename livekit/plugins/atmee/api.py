@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Thin async client for the Atmee API (session_service) used by the plugin.
+"""Thin async client for the Atmee API used by the plugin.
 
-Two resources matter here: **avatars** (create one from a portrait, read its
+Two resources matter here: **avatars** — Atmee v1 avatars, i.e. talking heads
+generated from a single portrait — (create one from a portrait, read its
 status) and **avatar sessions** (render an avatar into your LiveKit room for
 your agent, end it). Authentication is your Atmee API key (``sk_atmee_...``)
 in the ``X-Api-Key`` header; the key never reaches a browser.
@@ -156,8 +157,8 @@ class AtmeeAPI:
         key = api_key or os.getenv("ATMEE_API_KEY")
         if not key:
             raise AtmeeException(
-                "ATMEE_API_KEY must be set (or pass api_key=...); create one in the Atmee "
-                "developer settings"
+                "ATMEE_API_KEY must be set (or pass api_key=...); create one at "
+                "https://www.atmee.ai/studio/api-keys"
             )
         self._api_key = key
         self._api_url = (api_url or os.getenv("ATMEE_API_URL") or DEFAULT_API_URL).rstrip("/")
@@ -243,7 +244,7 @@ class AtmeeAPI:
         description: str | None = None,
         content_type: str | None = None,
     ) -> str:
-        """Create a render-only avatar from a single portrait and return its id.
+        """Create a render-only **v1 avatar** from a single portrait and return its id.
 
         ``image`` is a local file path, the image bytes, or an ``https://``
         URL the Atmee service can download. A portrait-only avatar is ready

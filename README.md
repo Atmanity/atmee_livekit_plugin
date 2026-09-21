@@ -1,7 +1,8 @@
 # Atmee avatar plugin for LiveKit Agents
 
-Bring your own LiveKit voice agent; Atmee renders a talking-head avatar from a
-single portrait into your room and bills per minute. Works like the other
+Bring your own LiveKit voice agent; Atmee renders a **v1 avatar** — a talking
+head generated from a single portrait — into your room. This plugin targets
+Atmee's v1 avatars specifically. Works like the other
 avatar plugins for [LiveKit Agents](https://docs.livekit.io/agents/): the
 avatar joins your room as its own participant, your agent's speech drives its
 video.
@@ -26,8 +27,8 @@ Python 3.10+, `livekit-agents` 1.6.8 or newer.
 
 ## Prerequisites
 
-- An **Atmee API key** (`sk_atmee_...`), in `ATMEE_API_KEY`. Get one from the
-  Atmee dashboard at [atmee.ai](https://atmee.ai) → developer / API settings.
+- An **Atmee API key** (`sk_atmee_...`), in `ATMEE_API_KEY`. Create one in the
+  Atmee studio at [atmee.ai/studio/api-keys](https://www.atmee.ai/studio/api-keys).
   Keep it on your agent's side; it never goes to a browser.
 - Your **own LiveKit project** (LiveKit Cloud or self-hosted): `LIVEKIT_URL`,
   `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` — the same variables your agent
@@ -75,7 +76,7 @@ Options on `AvatarSession`:
 | Argument | Default | Meaning |
 |---|---|---|
 | `avatar_id` | required | The Atmee avatar to render. |
-| `api_key`, `api_url` | `ATMEE_API_KEY`, `ATMEE_API_URL` | Credentials and API base. |
+| `api_key`, `api_url` | `ATMEE_API_KEY`, `ATMEE_API_URL` | Credentials and API base. `api_url` is optional and defaults to production, `https://api.atmanity.us`; set it only to target another environment. |
 | `avatar_participant_identity` | `atmee-avatar-agent` | Identity the avatar joins with; set it when one room hosts several avatars. |
 | `max_duration_seconds` | `3600` | Hard ceiling of the session; also the most it can bill if your agent dies without a trace. |
 | `wait_for` | `"initializing"` | `"avatar_joined"` makes `start()` block until the avatar is in the room. |

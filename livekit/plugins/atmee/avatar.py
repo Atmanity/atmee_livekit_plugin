@@ -52,7 +52,10 @@ _TOKEN_TTL_SLACK = timedelta(minutes=10)
 
 
 class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
-    """An Atmee avatar session: render an Atmee avatar into your agent's room.
+    """An Atmee avatar session: render an Atmee **v1 avatar** into your agent's room.
+
+    v1 avatars are talking heads generated from a single portrait (see
+    :meth:`AtmeeAPI.create_avatar`); this plugin targets them specifically.
 
     The avatar joins the room as its own participant (``atmee-avatar-agent``)
     publishing on behalf of your agent; your agent's audio output is replaced
