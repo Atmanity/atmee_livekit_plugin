@@ -117,10 +117,12 @@ has no portrait yet).
   LiveKit Agents Playground.
 - [`examples/gpt_live_1_agent.py`](examples/gpt_live_1_agent.py) — the same
   agent using OpenAI `gpt-live-1` (LiveKit's native `GPTLiveModel`) instead of
-  the STT/LLM/TTS pipeline. Delegates reasoning to a backend model
-  (`delegation="responses"`, `gpt-5.6-luna`) with expressive instructions for a
-  lively, playful voice; needs `livekit-agents[openai]` and an OpenAI key with
-  gpt-live-1 access.
+  the STT/LLM/TTS pipeline. Runs `delegation="client"` by default — gpt-live-1
+  answers itself, no backend round-trip, lowest latency, backchannels while you
+  talk — with expressive full-duplex instructions. `GPT_LIVE_DELEGATION=responses`
+  switches to a backend reasoning model (`gpt-5.6-luna`): smarter and able to
+  speak unprompted, but slower on every turn. Needs `livekit-agents[openai]` and
+  an OpenAI key with gpt-live-1 access.
 - [`examples/dispatch.py`](examples/dispatch.py) — helper for the gpt-live-1
   example: prints a viewer URL, waits until you've joined, then dispatches the
   avatar into that room (viewer-first). Run the worker in one terminal and this

@@ -16,10 +16,18 @@
 
 Same shape as ``agent.py`` — only the voice model differs: instead of an
 STT/LLM/TTS pipeline, this uses OpenAI's ``gpt-live-1`` full-duplex realtime
-model via LiveKit's native ``GPTLiveModel``. gpt-live-1 handles the spoken
-conversation and delegates reasoning to a backend model (``delegation="responses"``
-with ``gpt-5.6-luna``), which — with the expressive instructions below — makes it
-lively: it greets first, is playful, and will sing when asked.
+model via LiveKit's native ``GPTLiveModel``.
+
+By default gpt-live-1 runs with ``delegation="client"``: it listens, decides and
+speaks by itself, with no backend LLM round-trip per turn. That is what makes the
+avatar feel alive — it can drop in "mm-hm" while you are still talking, react
+instantly, and answer with the lowest latency. The liveliness comes from that
+immediacy plus the expressive instructions below, not from a bigger brain.
+
+Set ``GPT_LIVE_DELEGATION=responses`` to delegate reasoning to a backend model
+(``gpt-5.6-luna``) instead: smarter, tool-capable, and able to speak unprompted
+(e.g. an opening greeting), at the cost of an extra model round-trip on every
+turn — noticeably slower and more "assistant-like" on a live call.
 
     pip install "livekit-agents[openai]~=1.8" livekit-plugins-atmee
     cp examples/.env.example .env   # fill in the keys (incl. OPENAI_API_KEY, ATMEE_AVATAR_ID)
@@ -52,16 +60,22 @@ load_dotenv()
 
 # The avatar to render: create one with examples/create_avatar.py.
 ATMEE_AVATAR_ID = os.environ["ATMEE_AVATAR_ID"]
+# "client" (default): gpt-live-1 answers itself — lowest latency, most alive.
+# "responses": a backend model reasons for it — smarter, slower, can speak unprompted.
+DELEGATION = os.environ.get("GPT_LIVE_DELEGATION", "client")
 
 
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You are a warm, playful, high-energy voice companion. Greet the caller "
-                "brightly, keep replies short and spoken, and be expressive and spontaneous. "
-                "If the caller asks you to sing, actually sing. Never be stiff or refuse for "
-                "no reason."
+                "You are a warm, playful, high-energy live voice companion on a video call, "
+                "and you run full-duplex: you listen and talk at the same time. While the "
+                "caller is still speaking, drop in short spoken backchannels — 'mm-hm', "
+                "'right', 'oh nice', 'yeah' — so they hear you're engaged; don't wait for "
+                "them to finish. React instantly, tease lightly, interrupt naturally like a "
+                "real friend. If asked to sing, actually sing. Greet brightly the moment you "
+                "first hear the caller. Keep your own turns short."
             )
         )
 
@@ -69,12 +83,8 @@ class Assistant(Agent):
 async def entrypoint(ctx: agents.JobContext) -> None:
     await ctx.connect()
 
-    session = AgentSession(
-        # gpt-live-1 does the speaking; it delegates reasoning + tools to a backend
-        # Responses model. `responses_options` picks that backend and its instructions;
-        # `voice` picks the speaking voice. This is what makes it lively (vs. the terse
-        # delegation="client" mode, which has no backend brain).
-        llm=GPTLiveModel(
+    if DELEGATION == "responses":
+        llm = GPTLiveModel(
             voice="marin",
             delegation="responses",
             responses_options={
@@ -84,8 +94,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     "and playful. Happily go along with singing, jokes, and games."
                 ),
             },
-        ),
-    )
+        )
+    else:
+        llm = GPTLiveModel(voice="marin", delegation="client")
+
+    session = AgentSession(llm=llm)
 
     # ATMEE_API_KEY (and LIVEKIT_URL/API_KEY/API_SECRET) come from the environment.
     avatar = atmee.AvatarSession(avatar_id=ATMEE_AVATAR_ID)
@@ -94,7 +107,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await avatar.start(session, room=ctx.room)
 
     await session.start(agent=Assistant(), room=ctx.room)
-    await session.generate_reply(instructions="Greet the caller warmly and invite them to chat.")
+    if DELEGATION == "responses":
+        # An unprompted reply needs the Responses backend; with client delegation
+        # gpt-live-1 greets as soon as it first hears the caller (see instructions).
+        await session.generate_reply(
+            instructions="Greet the caller warmly and invite them to chat."
+        )
 
 
 if __name__ == "__main__":
