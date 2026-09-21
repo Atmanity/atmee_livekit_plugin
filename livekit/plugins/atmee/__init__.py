@@ -14,8 +14,8 @@
 
 """Atmee avatar plugin for LiveKit Agents.
 
-Bring your own LiveKit voice agent; Atmee renders a talking-head avatar from a
-single portrait into your room and bills per minute::
+Bring your own LiveKit voice agent; Atmee renders a **v1 avatar** (a talking head
+generated from a single portrait) into your room::
 
     from livekit.plugins import atmee
 
