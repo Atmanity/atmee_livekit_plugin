@@ -61,10 +61,13 @@ agent leaves, the room closes, or `AvatarSession.aclose()` runs.
   avatar instead of being published directly. The examples show the order.
 - **Explicit dispatch on shared projects.** A worker without `agent_name`
   auto-dispatches into every room of the LiveKit project.
-- **gpt-live-1 delegation:** `delegation="responses"` (a backend model does the
-  reasoning) is what makes the voice lively and smart; `delegation="client"` is
-  faster but terser. Only a Responses-delegated session accepts an unprompted
-  `generate_reply` / `response.create`.
+- **gpt-live-1 delegation:** the example defaults to `delegation="client"` — gpt-live-1
+  listens, decides and speaks by itself, so it can backchannel mid-sentence and answer
+  with the lowest latency; that immediacy (plus the prompt) is what makes it feel alive.
+  `GPT_LIVE_DELEGATION=responses` adds a backend reasoning model: smarter and able to
+  speak unprompted, but an extra round-trip on every turn — measurably less lively on a
+  live call. Only a Responses-delegated session accepts an unprompted
+  `generate_reply` / `response.create`; under `client` it greets when it first hears you.
 - **Shared OpenAI keys can get gpt-live-1 policy-blocked mid-session**; use a
   dedicated key for demos.
 - **Engagement is the prompt, not the voice model.** A bare gpt-live-1 or a bare
