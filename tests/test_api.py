@@ -8,6 +8,7 @@ import pytest
 
 from livekit.agents import APIConnectOptions
 from livekit.plugins.atmee import (
+    SUPPORTED_AVATAR_VERSIONS,
     AtmeeAPI,
     AtmeeAvatarNotReadyError,
     AtmeeException,
@@ -63,7 +64,45 @@ async def test_create_avatar_session_sends_key_and_payload(
     assert info.room_name == "dev-room-42"
     assert info.max_duration_seconds == 3600
     assert info.billing_mode == "metered"
+    assert info.avatar_version == "v1"
     assert api.api_url == fake_atmee.url
+
+
+def test_only_v1_avatars_are_supported() -> None:
+    assert SUPPORTED_AVATAR_VERSIONS == frozenset({"v1"})
+
+
+async def test_create_avatar_session_explicit_v1_sends_no_version_field(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    # The API contract has no version field: the version is plugin-side only
+    # and the request body is byte-for-byte what it was before.
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    info = await api.create_avatar_session(
+        AVATAR_ID, livekit_url="wss://x", livekit_token="t", avatar_version="v1"
+    )
+    assert info.avatar_version == "v1"
+    assert fake_atmee.calls("POST", SESSIONS_PATH)[0].json == {
+        "livekitUrl": "wss://x",
+        "livekitToken": "t",
+    }
+
+
+async def test_create_avatar_session_rejects_v2_before_any_request(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    with pytest.raises(ValueError, match="avatar_version 'v2' is not supported") as exc:
+        await api.create_avatar_session(
+            AVATAR_ID,
+            livekit_url="wss://x",
+            livekit_token="t",
+            avatar_version="v2",
+        )
+    assert "only 'v1'" in str(exc.value)
+    assert fake_atmee.requests == []
 
 
 async def test_create_avatar_session_wait_for_avatar_joined(
@@ -203,6 +242,55 @@ async def test_create_avatar_from_file_is_multipart(
     assert call.form["file"]["filename"] == "val.png"
     assert call.form["file"]["content_type"] == "image/png"
     assert call.form["file"]["data"] == b"\x89PNG\r\n\x1a\nfakepng"
+    assert set(call.form) == {"name", "description", "file"}  # no version field
+
+
+async def test_create_avatar_reports_v1_by_default(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script(
+        "POST",
+        "/v1/avatars",
+        201,
+        {"avatarId": AVATAR_ID, "kind": "render_only", "status": "ready"},
+    )
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    info = await api.create_avatar_info("Val", b"jpegbytes")
+    # `kind` comes from the API (voice/persona or not); `version` is the avatar
+    # generation, filled in by the plugin because the API reports none.
+    assert info.kind == "render_only"
+    assert info.version == "v1"
+    assert "version" not in info.raw
+    assert set(fake_atmee.calls("POST", "/v1/avatars")[0].form) == {"name", "file"}
+
+
+async def test_create_avatar_explicit_v1_keeps_manifest_unchanged(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script("POST", "/v1/avatars", 201, {"avatarId": AVATAR_ID, "status": "ready"})
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    info = await api.create_avatar_info("Val", "https://cdn.example/val.jpg", avatar_version="v1")
+    assert info.version == "v1"
+    assert fake_atmee.calls("POST", "/v1/avatars")[0].json == {
+        "schemaVersion": 1,
+        "name": "Val",
+        "assets": {"image": {"url": "https://cdn.example/val.jpg"}},
+    }
+
+
+async def test_create_avatar_rejects_v2_before_any_request(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, tmp_path: Path
+) -> None:
+    fake_atmee.script("POST", "/v1/avatars", 201, {"avatarId": AVATAR_ID, "status": "ready"})
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    with pytest.raises(ValueError, match="avatar_version 'v2' is not supported"):
+        await api.create_avatar("Val", "https://cdn.example/val.jpg", avatar_version="v2")
+    with pytest.raises(ValueError, match="only 'v1'"):
+        await api.create_avatar_info("Val", b"jpegbytes", avatar_version="v2")
+    missing = tmp_path / "does-not-exist.png"  # never read: the version check comes first
+    with pytest.raises(ValueError):
+        await api.create_avatar("Val", missing, avatar_version="v2")
+    assert fake_atmee.requests == []
 
 
 async def test_create_avatar_from_bytes(

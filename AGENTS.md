@@ -2,8 +2,10 @@
 
 `livekit-plugins-atmee` renders an Atmee **v1 avatar** — a talking head generated
 from a single portrait — into a LiveKit room, driven by your LiveKit voice agent's
-speech. The plugin targets v1 avatars specifically. This file gets you from clone
-to a talking avatar in minutes; the README has the full API.
+speech. The plugin targets v1 avatars specifically: `AvatarSession(avatar_version=...)`
+defaults to `"v1"`, and `"v2"` (the next avatar generation, not yet available through
+the plugin) raises `ValueError`. This file gets you from clone to a talking avatar in
+minutes; the README has the full API.
 
 ## 1. Setup (2 minutes)
 

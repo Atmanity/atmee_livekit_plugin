@@ -153,6 +153,62 @@ def test_avatar_id_required() -> None:
         atmee.AvatarSession(avatar_id="")
 
 
+async def test_avatar_version_defaults_to_v1(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID, "status": "completed"})
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    assert avatar.avatar_version == "v1"
+
+    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+
+    assert avatar.session_info is not None
+    assert avatar.session_info.avatar_version == "v1"
+    # The API has no version field: the request body is unchanged.
+    body = fake_atmee.calls("POST", SESSIONS_PATH)[0].json
+    assert set(body) == {"livekitUrl", "livekitToken", "agentIdentity", "maxDurationSeconds"}
+    await avatar.aclose()
+
+
+async def test_explicit_v1_is_accepted(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID, "status": "completed"})
+    avatar = atmee.AvatarSession(
+        avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session, avatar_version="v1"
+    )
+    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    assert avatar.avatar_version == "v1"
+    assert avatar.session_info is not None and avatar.session_info.avatar_version == "v1"
+    assert "avatarVersion" not in fake_atmee.calls("POST", SESSIONS_PATH)[0].json
+    await avatar.aclose()
+
+
+def test_v2_is_rejected_at_construction(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    # v2 is the next avatar generation and not available through the plugin
+    # yet: the constructor says so, before any token is minted or request sent.
+    with pytest.raises(ValueError, match="avatar_version 'v2' is not supported") as exc:
+        atmee.AvatarSession(
+            avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session, avatar_version="v2"
+        )
+    assert "only 'v1'" in str(exc.value)
+    assert fake_atmee.requests == []
+
+
+def test_unknown_version_is_rejected_at_construction(http_session: aiohttp.ClientSession) -> None:
+    with pytest.raises(ValueError, match="avatar_version 'v3' is not supported"):
+        atmee.AvatarSession(
+            avatar_id=AVATAR_ID,
+            conn_options=FAST,
+            http_session=http_session,
+            avatar_version="v3",  # type: ignore[arg-type]
+        )
+
+
 async def test_wait_for_is_forwarded(
     fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
 ) -> None:
