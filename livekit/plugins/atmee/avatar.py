@@ -35,7 +35,14 @@ from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.agents.voice.avatar import DataStreamAudioOutput
 from livekit.agents.voice.room_io import ATTRIBUTE_PUBLISH_ON_BEHALF
 
-from .api import AtmeeAPI, AtmeeException, AvatarSessionInfo, WaitFor
+from .api import (
+    AtmeeAPI,
+    AtmeeException,
+    AvatarSessionInfo,
+    AvatarVersion,
+    WaitFor,
+    _check_avatar_version,
+)
 from .log import logger
 
 # The rendering worker resamples nothing: it consumes 16 kHz mono PCM over the
@@ -82,10 +89,16 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         wait_for: WaitFor = "initializing",
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_session: aiohttp.ClientSession | None = None,
+        avatar_version: AvatarVersion = "v1",
     ) -> None:
         """
         Args:
             avatar_id: the Atmee avatar to render (``AtmeeAPI.create_avatar``).
+            avatar_version: the avatar generation to render. ``"v1"`` (default)
+                is a talking head generated from a single portrait, the only
+                version the plugin renders today; ``"v2"``, Atmee's next
+                generation, is not available through the plugin yet and
+                raises ``ValueError`` right here.
             api_key: your ``sk_atmee_...`` key; defaults to ``ATMEE_API_KEY``.
             api_url: API base; defaults to ``ATMEE_API_URL`` or the Atmee cloud.
             avatar_participant_identity: identity the avatar joins with
@@ -102,7 +115,9 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         super().__init__()
         if not avatar_id:
             raise AtmeeException("avatar_id is required")
+        _check_avatar_version(avatar_version)
         self._avatar_id = avatar_id
+        self._avatar_version: AvatarVersion = avatar_version
         self._max_duration_seconds = int(max_duration_seconds)
         self._metadata = metadata
         self._wait_for: WaitFor = wait_for
@@ -134,6 +149,11 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
     @property
     def provider(self) -> str:
         return "atmee"
+
+    @property
+    def avatar_version(self) -> AvatarVersion:
+        """The avatar generation this session renders (``"v1"``)."""
+        return self._avatar_version
 
     @property
     def api(self) -> AtmeeAPI:
@@ -193,7 +213,11 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
 
         logger.debug(
             "starting atmee avatar session",
-            extra={"avatar_id": self._avatar_id, "room": room.name},
+            extra={
+                "avatar_id": self._avatar_id,
+                "avatar_version": self._avatar_version,
+                "room": room.name,
+            },
         )
         info = await self._api.create_avatar_session(
             self._avatar_id,
@@ -203,6 +227,7 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
             max_duration_seconds=self._max_duration_seconds,
             metadata=self._metadata,
             wait_for=self._wait_for,
+            avatar_version=self._avatar_version,
         )
         self.session_info = info
         self.session_id = info.session_id
@@ -210,6 +235,7 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
             "atmee avatar session started",
             extra={
                 "session_id": info.session_id,
+                "avatar_version": info.avatar_version,
                 "status": info.status,
                 "billing_mode": info.billing_mode,
                 "max_duration_seconds": info.max_duration_seconds,

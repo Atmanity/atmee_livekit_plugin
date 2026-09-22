@@ -46,6 +46,18 @@ DEFAULT_API_URL = "https://api.atmanity.us"
 
 WaitFor = Literal["initializing", "avatar_joined"]
 
+AvatarVersion = Literal["v1", "v2"]
+"""An Atmee avatar generation.
+
+``"v1"`` is a talking head generated from a single portrait, lip-synced to the
+agent's speech: the avatars this plugin renders today. ``"v2"`` is the name of
+Atmee's next avatar generation; it is not available through this plugin yet
+and requesting it raises :class:`ValueError`.
+"""
+
+SUPPORTED_AVATAR_VERSIONS: frozenset[AvatarVersion] = frozenset({"v1"})
+"""The avatar versions this release of the plugin can render."""
+
 # Overall budget of the start call: the worker acknowledges within seconds, but
 # waiting for the avatar to join covers model priming on a cold pod (the
 # server's own join timeout is 90 s) plus the room join.
@@ -96,9 +108,25 @@ class AtmeeAvatarNotReadyError(AtmeeException):
     it has no portrait, or its appearance is still being processed."""
 
 
+def _check_avatar_version(avatar_version: str) -> None:
+    """Reject an avatar version this plugin cannot render, before any API call."""
+    if avatar_version in SUPPORTED_AVATAR_VERSIONS:
+        return
+    supported = ", ".join(f"'{v}'" for v in sorted(SUPPORTED_AVATAR_VERSIONS))
+    raise ValueError(
+        f"avatar_version '{avatar_version}' is not supported by livekit-plugins-atmee yet; "
+        f"only {supported} (talking-head avatars rendered from a single portrait) "
+        "can be rendered today"
+    )
+
+
 @dataclass
 class AvatarSessionInfo:
-    """The ``202`` body of ``POST /v1/avatars/{avatarId}/avatar_sessions``."""
+    """The ``202`` body of ``POST /v1/avatars/{avatarId}/avatar_sessions``.
+
+    ``avatar_version`` is the avatar generation the session was requested for
+    (``"v1"``); the plugin fills it in, the API body carries no such field.
+    """
 
     session_id: str
     status: str
@@ -107,17 +135,24 @@ class AvatarSessionInfo:
     room_name: str
     max_duration_seconds: int
     billing_mode: str
+    avatar_version: str = "v1"
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
 @dataclass
 class AvatarInfo:
-    """What ``GET /v1/avatars/{avatarId}`` (and a create) report about an avatar."""
+    """What ``GET /v1/avatars/{avatarId}`` (and a create) report about an avatar.
+
+    ``kind`` (``conversational`` | ``render_only``) says whether the avatar has
+    a voice and persona; ``version`` is the avatar generation (``"v1"``, filled
+    in by the plugin: the API reports no version).
+    """
 
     avatar_id: str
     status: str
     kind: str | None = None
     name: str | None = None
+    version: str = "v1"
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
@@ -182,6 +217,7 @@ class AtmeeAPI:
         max_duration_seconds: int | None = None,
         metadata: dict[str, Any] | None = None,
         wait_for: WaitFor = "initializing",
+        avatar_version: AvatarVersion = "v1",
     ) -> AvatarSessionInfo:
         """Render ``avatar_id`` into the room ``livekit_token`` grants.
 
@@ -191,7 +227,13 @@ class AtmeeAPI:
         attribute naming your agent (:class:`AvatarSession` does this for
         you). Returns as soon as the rendering worker acknowledged the start,
         or once the avatar joined with ``wait_for="avatar_joined"``.
+
+        ``avatar_version`` names the avatar generation to render; only
+        ``"v1"`` is available today and anything else raises ``ValueError``
+        before the request is sent. It is plugin-side only: the request body
+        carries no version field.
         """
+        _check_avatar_version(avatar_version)
         payload: dict[str, Any] = {"livekitUrl": livekit_url, "livekitToken": livekit_token}
         if agent_identity:
             payload["agentIdentity"] = agent_identity
@@ -222,6 +264,7 @@ class AtmeeAPI:
             room_name=str(data.get("roomName", "")),
             max_duration_seconds=int(data.get("maxDurationSeconds") or 0),
             billing_mode=str(data.get("billingMode", "")),
+            avatar_version=avatar_version,
             raw=data,
         )
 
@@ -243,6 +286,7 @@ class AtmeeAPI:
         *,
         description: str | None = None,
         content_type: str | None = None,
+        avatar_version: AvatarVersion = "v1",
     ) -> str:
         """Create a render-only **v1 avatar** from a single portrait and return its id.
 
@@ -250,9 +294,18 @@ class AtmeeAPI:
         URL the Atmee service can download. A portrait-only avatar is ready
         at once; nothing to poll. Add a voice later in the Atmee studio (or
         ``PUT /v1/avatars/{id}/voice``) to make it conversational as well.
+
+        ``avatar_version`` is the avatar generation to create; only ``"v1"``
+        is available today and anything else raises ``ValueError`` before any
+        request is sent. The API contract has no version field, so nothing is
+        added to the request.
         """
         info = await self.create_avatar_info(
-            name, image, description=description, content_type=content_type
+            name,
+            image,
+            description=description,
+            content_type=content_type,
+            avatar_version=avatar_version,
         )
         return info.avatar_id
 
@@ -263,8 +316,10 @@ class AtmeeAPI:
         *,
         description: str | None = None,
         content_type: str | None = None,
+        avatar_version: AvatarVersion = "v1",
     ) -> AvatarInfo:
         """Like :meth:`create_avatar`, returning the whole response."""
+        _check_avatar_version(avatar_version)
         if isinstance(image, str) and _is_url(image):
             manifest: dict[str, Any] = {
                 "schemaVersion": 1,
@@ -274,7 +329,7 @@ class AtmeeAPI:
             if description:
                 manifest["description"] = description
             data = await self._request("POST", "/v1/avatars", json=manifest, retry=False)
-            return _avatar_info(data)
+            return _avatar_info(data, version=avatar_version)
 
         if isinstance(image, bytes | bytearray):
             blob = bytes(image)
@@ -288,7 +343,7 @@ class AtmeeAPI:
             form.add_field("description", description)
         form.add_field("file", blob, filename=filename, content_type=ctype)
         data = await self._request("POST", "/v1/avatars", data=form, retry=False)
-        return _avatar_info(data)
+        return _avatar_info(data, version=avatar_version)
 
     async def get_avatar(self, avatar_id: str) -> AvatarInfo:
         return _avatar_info(await self._request("GET", f"/v1/avatars/{avatar_id}"))
@@ -416,12 +471,13 @@ async def _error_from_response(response: aiohttp.ClientResponse) -> AtmeeExcepti
     return AtmeeException(message, status_code=response.status, code=code)
 
 
-def _avatar_info(data: dict[str, Any]) -> AvatarInfo:
+def _avatar_info(data: dict[str, Any], *, version: AvatarVersion = "v1") -> AvatarInfo:
     return AvatarInfo(
         avatar_id=str(data.get("avatarId") or data.get("id") or ""),
         status=str(data.get("status", "")),
         kind=data.get("kind"),
         name=data.get("name"),
+        version=version,
         raw=data,
     )
 

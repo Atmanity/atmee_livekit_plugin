@@ -76,6 +76,7 @@ Options on `AvatarSession`:
 | Argument | Default | Meaning |
 |---|---|---|
 | `avatar_id` | required | The Atmee avatar to render. |
+| `avatar_version` | `"v1"` | The avatar generation to render. Only `"v1"` is available today; `"v2"` raises `ValueError` (see [Avatar versions](#avatar-versions)). |
 | `api_key`, `api_url` | `ATMEE_API_KEY`, `ATMEE_API_URL` | Credentials and API base. `api_url` is optional and defaults to production, `https://api.atmanity.us`; set it only to target another environment. |
 | `avatar_participant_identity` | `atmee-avatar-agent` | Identity the avatar joins with; set it when one room hosts several avatars. |
 | `max_duration_seconds` | `3600` | Hard ceiling of the session; also the most it can bill if your agent dies without a trace. |
@@ -85,6 +86,34 @@ Options on `AvatarSession`:
 `avatar.session_id` and `avatar.session_info` hold the Atmee session after
 `start()`; `avatar.on("avatar_disconnected", ...)` fires if the avatar
 participant leaves while your agent is still running.
+
+### Avatar versions
+
+Atmee avatars come in generations, and the plugin states which one it renders:
+
+- **`v1`** — a talking-head avatar generated from one portrait, lip-synced to
+  your agent's speech. This is what the plugin renders today, and the default
+  everywhere, so existing code needs no change.
+- **`v2`** — Atmee's next avatar generation. It is not yet available through
+  the plugin: `AvatarSession(..., avatar_version="v2")` and
+  `create_avatar(..., avatar_version="v2")` raise `ValueError` right away,
+  before any request is sent.
+
+```python
+from livekit.plugins import atmee
+
+avatar = atmee.AvatarSession(avatar_id=..., avatar_version="v1")  # explicit is fine
+avatar.avatar_version                     # "v1"
+avatar.session_info.avatar_version        # "v1", after start()
+atmee.SUPPORTED_AVATAR_VERSIONS           # frozenset({"v1"})
+```
+
+`atmee.AvatarVersion` is the `Literal["v1", "v2"]` type of the argument;
+`AtmeeAPI.create_avatar()` takes the same `avatar_version` and reports it as
+`AvatarInfo.version`. The version is plugin-side surface: it never appears in
+the requests sent to the Atmee API, and it is unrelated to `AvatarInfo.kind`
+(`conversational` | `render_only`), which says whether an avatar has a voice
+and persona.
 
 ### Lifecycle and billing
 

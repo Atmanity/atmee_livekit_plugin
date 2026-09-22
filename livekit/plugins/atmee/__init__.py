@@ -29,17 +29,20 @@ See https://github.com/Atmanity/atmee_livekit_plugin for the architecture notes.
 """
 
 from .api import (
+    SUPPORTED_AVATAR_VERSIONS,
     AtmeeAPI,
     AtmeeAvatarNotReadyError,
     AtmeeException,
     AtmeeNoCapacityError,
     AvatarInfo,
     AvatarSessionInfo,
+    AvatarVersion,
 )
 from .avatar import AvatarSession
 from .version import __version__
 
 __all__ = [
+    "SUPPORTED_AVATAR_VERSIONS",
     "AtmeeAPI",
     "AtmeeAvatarNotReadyError",
     "AtmeeException",
@@ -47,6 +50,7 @@ __all__ = [
     "AvatarInfo",
     "AvatarSession",
     "AvatarSessionInfo",
+    "AvatarVersion",
     "__version__",
 ]
 
