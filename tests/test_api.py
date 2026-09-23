@@ -391,3 +391,18 @@ async def test_malformed_success_is_a_typed_error(
         await api.get_avatar_session(SESSION_ID)
     assert exc.value.code == "invalid_response"
     assert len(fake_atmee.calls("GET", get_path)) == 1  # a 2xx is never retried
+
+
+async def test_wait_until_ready_deadline_bounds_retries(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    path = f"/v1/avatars/{AVATAR_ID}"
+    fake_atmee.script("GET", path, 502, body="bad gateway", times=20)
+    slow_retries = APIConnectOptions(max_retry=5, retry_interval=30.0, timeout=5.0)
+    api = AtmeeAPI(session=http_session, conn_options=slow_retries)
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+    with pytest.raises(AtmeeException):
+        await api.wait_until_ready(AVATAR_ID, timeout=0.3, poll_interval=30)
+    # the 30 s retry pauses were cut to the remaining budget
+    assert loop.time() - began < 2
