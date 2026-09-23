@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -195,11 +196,12 @@ async def test_idempotent_calls_retry_5xx_then_raise(
     assert len(fake_atmee.calls("GET", get_path)) == 3
     assert got["status"] == "active"
 
-    fake_atmee.script("GET", get_path, 500, body="down", times=3)
+    # max_retry=3 means three retries after the first attempt: four calls
+    fake_atmee.script("GET", get_path, 500, body="down", times=4)
     with pytest.raises(AtmeeException) as exc:
         await api.get_avatar_session(SESSION_ID)
     assert exc.value.status_code == 500
-    assert len(fake_atmee.calls("GET", get_path)) == 6
+    assert len(fake_atmee.calls("GET", get_path)) == 7
 
 
 async def test_end_and_get_avatar_session(
@@ -356,3 +358,24 @@ async def test_owns_session_outside_a_job(fake_atmee: FakeAtmee) -> None:
 def test_error_str_carries_code_and_status() -> None:
     e = AtmeeException("nope", status_code=402, code="insufficient_credits")
     assert str(e) == "nope [insufficient_credits] (HTTP 402)"
+
+
+def test_plaintext_api_url_is_refused() -> None:
+    with pytest.raises(AtmeeException, match="https"):
+        AtmeeAPI(api_url="http://api.example.com")
+    AtmeeAPI(api_url="http://127.0.0.1:8080")  # loopback is fine for local development
+    AtmeeAPI(api_url="https://api.example.com")
+
+
+async def test_wait_until_ready_honours_its_timeout(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    path = f"/v1/avatars/{AVATAR_ID}"
+    fake_atmee.script("GET", path, 200, {"avatarId": AVATAR_ID, "status": "building"}, times=5)
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+    with pytest.raises(AtmeeException) as exc:
+        await api.wait_until_ready(AVATAR_ID, timeout=0.2, poll_interval=30)
+    assert exc.value.code == "timeout"
+    assert loop.time() - began < 2  # the 30 s poll interval was capped by the deadline
