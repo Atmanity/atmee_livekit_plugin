@@ -285,3 +285,19 @@ async def test_construct_outside_a_job_without_http_session(fake_atmee: FakeAtme
     await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
     await avatar.aclose()
     assert len(fake_atmee.calls("POST", END_PATH)) == 1
+
+
+async def test_agent_session_close_ends_the_render(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID})
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    agent_session = FakeAgentSession()
+    await avatar.start(agent_session, FakeRoom())  # type: ignore[arg-type]
+    # AgentSession.aclose() without a job shutdown: the render must end too
+    for handler in list(agent_session.handlers.get("close", [])):
+        handler(None)
+    await settle()
+    assert len(fake_atmee.calls("POST", END_PATH)) == 1
+    assert "close" not in agent_session.handlers or not agent_session.handlers["close"]

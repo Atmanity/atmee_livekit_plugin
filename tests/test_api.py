@@ -379,3 +379,15 @@ async def test_wait_until_ready_honours_its_timeout(
         await api.wait_until_ready(AVATAR_ID, timeout=0.2, poll_interval=30)
     assert exc.value.code == "timeout"
     assert loop.time() - began < 2  # the 30 s poll interval was capped by the deadline
+
+
+async def test_malformed_success_is_a_typed_error(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    get_path = f"/v1/avatar_sessions/{SESSION_ID}"
+    fake_atmee.script("GET", get_path, 200, body="<html>not json</html>")
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    with pytest.raises(AtmeeException) as exc:
+        await api.get_avatar_session(SESSION_ID)
+    assert exc.value.code == "invalid_response"
+    assert len(fake_atmee.calls("GET", get_path)) == 1  # a 2xx is never retried
