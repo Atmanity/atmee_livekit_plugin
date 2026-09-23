@@ -116,8 +116,16 @@ async def test_end_failure_never_breaks_close(
     fake_atmee.script("POST", END_PATH, 500, body="down")
     avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
     await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    fake_atmee.script("POST", END_PATH, 500, body="down")  # max_retry=1: two attempts
     await avatar.aclose()  # must not raise
-    assert len(fake_atmee.calls("POST", END_PATH)) == 1
+    assert len(fake_atmee.calls("POST", END_PATH)) == 2
+
+    # the failed end was not recorded as done, so a later aclose retries it
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID, "alreadyEnded": False})
+    await avatar.aclose()
+    assert len(fake_atmee.calls("POST", END_PATH)) == 3
+    await avatar.aclose()  # confirmed ended: no further request
+    assert len(fake_atmee.calls("POST", END_PATH)) == 3
 
 
 async def test_start_failure_is_typed(
@@ -233,3 +241,120 @@ async def test_wait_for_is_forwarded(
     assert avatar.session_info is not None and avatar.session_info.status == "avatar_joined"
     await asyncio.sleep(0)
     await avatar.aclose()
+
+
+async def test_end_4xx_is_final(fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    fake_atmee.script("POST", END_PATH, 404, {"error": "not_found", "message": "gone"})
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    await avatar.aclose()
+    await avatar.aclose()  # unknown session: nothing left to end, no retry
+    assert len(fake_atmee.calls("POST", END_PATH)) == 1
+
+
+async def test_start_is_one_shot(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    with pytest.raises(atmee.AtmeeException, match="already called"):
+        await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    # the second call never reached the API, so no second billed render
+    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 1
+
+
+async def test_start_without_session_id_is_rejected(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, {"status": "initializing"})
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    with pytest.raises(atmee.AtmeeException) as exc:
+        await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    assert exc.value.code == "invalid_response"
+    assert avatar.session_id is None
+
+
+async def test_construct_outside_a_job_without_http_session(fake_atmee: FakeAtmee) -> None:
+    # no job context and no session passed: construction must not touch the
+    # job's http context; the client creates (and aclose releases) its own
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST)
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID})
+    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+    await avatar.aclose()
+    assert len(fake_atmee.calls("POST", END_PATH)) == 1
+
+
+async def test_agent_session_close_ends_the_render(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID})
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    agent_session = FakeAgentSession()
+    await avatar.start(agent_session, FakeRoom())  # type: ignore[arg-type]
+    # AgentSession.aclose() without a job shutdown: the render must end too
+    for handler in list(agent_session.handlers.get("close", [])):
+        handler(None)
+    await settle()
+    assert len(fake_atmee.calls("POST", END_PATH)) == 1
+    assert "close" not in agent_session.handlers or not agent_session.handlers["close"]
+
+
+async def test_concurrent_aclose_never_closes_the_session_mid_end(
+    fake_atmee: FakeAtmee, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    fake_atmee.script("POST", END_PATH, 500, body="down")
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID})
+    no_retry = APIConnectOptions(max_retry=0, retry_interval=0.0, timeout=5.0)
+    # no http_session passed: the client owns one, and aclose() closes it
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=no_retry)
+    agent_session = FakeAgentSession()
+    await avatar.start(agent_session, FakeRoom())  # type: ignore[arg-type]
+
+    # In a job the base aclose() awaits the LiveKit API to remove the avatar
+    # participant, and ending a render is a network round trip: model both,
+    # and record how many ends are in flight whenever the HTTP client closes.
+    from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
+
+    base_aclose = BaseAvatarSession.aclose
+
+    async def slow_base_aclose(self: Any) -> None:
+        await asyncio.sleep(0.01)
+        await base_aclose(self)
+
+    monkeypatch.setattr(BaseAvatarSession, "aclose", slow_base_aclose)
+    in_flight = 0
+    in_flight_at_close: list[int] = []
+    real_end, real_close = avatar.api.end_avatar_session, avatar.api.aclose
+
+    async def slow_end(session_id: str) -> dict[str, Any]:
+        nonlocal in_flight
+        in_flight += 1
+        try:
+            await asyncio.sleep(0.05)
+            return await real_end(session_id)
+        finally:
+            in_flight -= 1
+
+    async def recording_close() -> None:
+        in_flight_at_close.append(in_flight)
+        await real_close()
+
+    monkeypatch.setattr(avatar.api, "end_avatar_session", slow_end)
+    monkeypatch.setattr(avatar.api, "aclose", recording_close)
+
+    # the agent session closes (background aclose) while the job shuts down (explicit aclose)
+    for handler in list(agent_session.handlers.get("close", [])):
+        handler(None)
+    await avatar.aclose()
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if len(in_flight_at_close) >= 2:
+            break
+
+    assert in_flight_at_close and all(n == 0 for n in in_flight_at_close)
+    assert avatar._ended  # the second close retried the failed end and it went through

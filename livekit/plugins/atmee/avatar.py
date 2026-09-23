@@ -29,7 +29,6 @@ from livekit.agents import (
     APIConnectOptions,
     NotGivenOr,
     get_job_context,
-    utils,
 )
 from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
 from livekit.agents.voice.avatar import DataStreamAudioOutput
@@ -110,7 +109,8 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
                 once the worker acknowledged the start; ``"avatar_joined"``
                 blocks until the avatar is in the room.
             http_session: an aiohttp session to reuse; the job's shared one by
-                default.
+                default, or a private one outside a job (released by
+                :meth:`aclose`).
         """
         super().__init__()
         if not avatar_id:
@@ -122,12 +122,13 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         self._metadata = metadata
         self._wait_for: WaitFor = wait_for
         self._conn_options = conn_options
-        self._http_session = http_session
+        # Resolved lazily by AtmeeAPI: the job's shared session inside a
+        # worker, a private one (closed by aclose) outside.
         self._api = AtmeeAPI(
             api_key=api_key,
             api_url=api_url,
             conn_options=conn_options,
-            session=self._ensure_http_session(),
+            session=http_session,
         )
 
         self._avatar_participant_identity = avatar_participant_identity or _AVATAR_AGENT_IDENTITY
@@ -139,8 +140,13 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         """The full start response once :meth:`start` returned."""
 
         self._end_task: asyncio.Task[None] | None = None
+        self._end_lock = asyncio.Lock()
+        self._close_lock = asyncio.Lock()
         self._ended = False
+        self._started = False
         self._room_for_events: rtc.Room | None = None
+        self._agent_session_for_events: AgentSession[Any] | None = None
+        self._aclose_task: asyncio.Task[None] | None = None
 
     @property
     def avatar_identity(self) -> str:
@@ -160,11 +166,6 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         """The API client this session uses (same key and base URL)."""
         return self._api
 
-    def _ensure_http_session(self) -> aiohttp.ClientSession:
-        if self._http_session is None:
-            self._http_session = utils.http_context.http_session()
-        return self._http_session
-
     async def start(
         self,
         agent_session: AgentSession[Any],
@@ -181,7 +182,17 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         ``LIVEKIT_API_SECRET`` or the arguments), asks Atmee to render into
         the room, and routes the agent's audio to the avatar. Call before
         ``agent_session.start``.
+
+        One-shot: each call creates a separately billed render, so a second
+        ``start()`` on the same instance raises. After a failed start, create
+        a new ``AvatarSession``.
         """
+        if self._started:
+            raise AtmeeException(
+                "AvatarSession.start() was already called; create a new AvatarSession "
+                "for another render"
+            )
+        self._started = True
         await super().start(agent_session, room)
 
         livekit_url = livekit_url or (os.getenv("LIVEKIT_URL") or NOT_GIVEN)
@@ -216,7 +227,7 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
             extra={
                 "avatar_id": self._avatar_id,
                 "avatar_version": self._avatar_version,
-                "room": room.name,
+                "lk.pii.room": room.name,
             },
         )
         info = await self._api.create_avatar_session(
@@ -244,6 +255,11 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
 
         self._room_for_events = room
         room.on("participant_disconnected", self._on_participant_disconnected)
+        # The agent session can close without the job shutting down
+        # (AgentSession.aclose(), an error): end the render then too, or it
+        # would bill until max_duration_seconds.
+        self._agent_session_for_events = agent_session
+        agent_session.on("close", self._on_agent_session_close)
 
         agent_session.output.replace_audio_tail(
             DataStreamAudioOutput(
@@ -262,39 +278,71 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         # closes the gap for a worker that could not (idempotent).
         logger.warning(
             "atmee avatar participant left the room",
-            extra={"session_id": self.session_id, "identity": participant.identity},
+            extra={"session_id": self.session_id, "lk.pii.identity": participant.identity},
         )
         self.emit("avatar_disconnected", participant)
         self._schedule_end()
+
+    def _on_agent_session_close(self, _: Any) -> None:
+        if self._aclose_task is None:
+            self._aclose_task = asyncio.create_task(self.aclose())
 
     def _schedule_end(self) -> None:
         if self._end_task is None or self._end_task.done():
             self._end_task = asyncio.create_task(self._end_session())
 
     async def _end_session(self) -> None:
-        """Best-effort ``POST /v1/avatar_sessions/{id}/end`` — once."""
-        if self._ended or not self.session_id:
-            return
-        self._ended = True
-        try:
-            await self._api.end_avatar_session(self.session_id)
+        """Best-effort ``POST /v1/avatar_sessions/{id}/end``.
+
+        Serialized, and marked done only once the API confirmed the end (the
+        call is idempotent), so a failed or cancelled attempt can be retried
+        by a later :meth:`aclose`.
+        """
+        async with self._end_lock:
+            if self._ended or not self.session_id:
+                return
+            try:
+                await self._api.end_avatar_session(self.session_id)
+            except AtmeeException as e:
+                if 400 <= e.status_code < 500 and e.status_code not in (408, 429):
+                    # The session is unknown or already settled on the Atmee
+                    # side: nothing left to end, retrying would not help.
+                    self._ended = True
+                logger.warning(
+                    "failed to end atmee avatar session; the worker's own report or the "
+                    "session ceiling will settle it",
+                    extra={"session_id": self.session_id, "error": str(e)},
+                )
+                return
+            except Exception as e:  # never let a billing hint break teardown
+                logger.warning(
+                    "failed to end atmee avatar session; the worker's own report or the "
+                    "session ceiling will settle it",
+                    extra={"session_id": self.session_id, "error": str(e)},
+                )
+                return
+            self._ended = True
             logger.debug("atmee avatar session ended", extra={"session_id": self.session_id})
-        except Exception as e:  # never let a billing hint break teardown
-            logger.warning(
-                "failed to end atmee avatar session; the worker's own report or the "
-                "session ceiling will settle it",
-                extra={"session_id": self.session_id, "error": str(e)},
-            )
 
     async def aclose(self) -> None:
         """End the Atmee session and remove the avatar from the room.
 
         Registered as a job shutdown callback by :meth:`start`; call it
-        yourself when running outside a job.
+        yourself when running outside a job. Safe to call more than once and
+        concurrently (the agent session's ``close`` event also triggers it):
+        calls are serialized, so the HTTP session is never closed while
+        another call is still ending the render.
         """
+        async with self._close_lock:
+            await self._aclose_locked()
+
+    async def _aclose_locked(self) -> None:
         if self._room_for_events is not None:
             self._room_for_events.off("participant_disconnected", self._on_participant_disconnected)
             self._room_for_events = None
+        if self._agent_session_for_events is not None:
+            self._agent_session_for_events.off("close", self._on_agent_session_close)
+            self._agent_session_for_events = None
         if self._end_task is not None and not self._end_task.done():
             try:
                 await self._end_task
@@ -302,3 +350,4 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
                 pass
         await self._end_session()
         await super().aclose()
+        await self._api.aclose()
