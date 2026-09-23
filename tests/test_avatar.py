@@ -358,3 +358,25 @@ async def test_concurrent_aclose_never_closes_the_session_mid_end(
 
     assert in_flight_at_close and all(n == 0 for n in in_flight_at_close)
     assert avatar._ended  # the second close retried the failed end and it went through
+
+
+async def test_failed_start_releases_the_base_session_hooks(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script(
+        "POST",
+        SESSIONS_PATH,
+        503,
+        {"error": "no_capacity", "message": "busy"},
+        headers={"Retry-After": "5"},
+    )
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    agent_session, room = FakeAgentSession(), FakeRoom()
+    with pytest.raises(atmee.AtmeeNoCapacityError):
+        await avatar.start(agent_session, room)  # type: ignore[arg-type]
+    # the listeners super().start() installed are gone again
+    assert not agent_session.handlers.get("conversation_item_added")
+    assert not room.handlers.get("connection_state_changed")
+    # and the instance stays spent
+    with pytest.raises(atmee.AtmeeException, match="already called"):
+        await avatar.start(agent_session, room)  # type: ignore[arg-type]

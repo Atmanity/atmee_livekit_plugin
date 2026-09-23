@@ -408,3 +408,15 @@ async def test_wait_until_ready_deadline_bounds_retries(
     assert exc.value.code == "timeout"
     # the 30 s retry pauses were cut to the remaining budget
     assert loop.time() - began < 2
+
+
+async def test_plain_503_is_retried_like_any_5xx(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    get_path = f"/v1/avatar_sessions/{SESSION_ID}"
+    fake_atmee.script("GET", get_path, 503, body="Service Unavailable")  # e.g. from a proxy
+    fake_atmee.script("GET", get_path, 200, {"sessionId": SESSION_ID, "status": "active"})
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    got = await api.get_avatar_session(SESSION_ID)
+    assert got["status"] == "active"
+    assert len(fake_atmee.calls("GET", get_path)) == 2
