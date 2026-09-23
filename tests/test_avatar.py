@@ -416,3 +416,17 @@ async def test_failure_before_the_render_request_never_removes_a_participant(
     with pytest.raises(atmee.AtmeeException):
         await avatar.start(FakeAgentSession(), room)  # type: ignore[arg-type]
     assert rooms_seen[-1] is room
+
+
+async def test_cleanup_error_never_hides_the_start_failure(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 503, {"error": "no_capacity", "message": "busy"})
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+
+    async def broken_close() -> None:
+        raise RuntimeError("teardown broke")
+
+    monkeypatch.setattr(avatar.api, "aclose", broken_close)
+    with pytest.raises(atmee.AtmeeNoCapacityError):  # the real cause, not the teardown error
+        await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
