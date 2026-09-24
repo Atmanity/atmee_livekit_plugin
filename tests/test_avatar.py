@@ -358,3 +358,75 @@ async def test_concurrent_aclose_never_closes_the_session_mid_end(
 
     assert in_flight_at_close and all(n == 0 for n in in_flight_at_close)
     assert avatar._ended  # the second close retried the failed end and it went through
+
+
+async def test_failed_start_releases_the_base_session_hooks(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    fake_atmee.script(
+        "POST",
+        SESSIONS_PATH,
+        503,
+        {"error": "no_capacity", "message": "busy"},
+        headers={"Retry-After": "5"},
+    )
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    agent_session, room = FakeAgentSession(), FakeRoom()
+    with pytest.raises(atmee.AtmeeNoCapacityError):
+        await avatar.start(agent_session, room)  # type: ignore[arg-type]
+    # the listeners super().start() installed are gone again
+    assert not agent_session.handlers.get("conversation_item_added")
+    assert not room.handlers.get("connection_state_changed")
+    # and the instance stays spent
+    with pytest.raises(atmee.AtmeeException, match="already called"):
+        await avatar.start(agent_session, room)  # type: ignore[arg-type]
+
+
+async def test_failure_before_the_render_request_never_removes_a_participant(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The base aclose() removes the avatar identity from any room it still
+    # holds; record which room it sees on each failure path.
+    from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
+
+    base_aclose = BaseAvatarSession.aclose
+    rooms_seen: list[Any] = []
+
+    async def recording_base_aclose(self: Any) -> None:
+        rooms_seen.append(self._room)
+        await base_aclose(self)
+
+    monkeypatch.setattr(BaseAvatarSession, "aclose", recording_base_aclose)
+
+    # 1) credentials missing: fails before Atmee is contacted
+    monkeypatch.delenv("LIVEKIT_API_SECRET")
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    room = FakeRoom()
+    with pytest.raises(atmee.AtmeeException):
+        await avatar.start(FakeAgentSession(), room)  # type: ignore[arg-type]
+    assert rooms_seen == [None]  # nothing to remove from the room
+    assert not room.handlers.get("connection_state_changed")
+    assert fake_atmee.calls("POST", SESSIONS_PATH) == []
+
+    # 2) the render request went out and failed: close fully (conservative)
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "the-developers-secret-the-developers-secret")
+    fake_atmee.script("POST", SESSIONS_PATH, 500, body="down")
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    room = FakeRoom()
+    with pytest.raises(atmee.AtmeeException):
+        await avatar.start(FakeAgentSession(), room)  # type: ignore[arg-type]
+    assert rooms_seen[-1] is room
+
+
+async def test_cleanup_error_never_hides_the_start_failure(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_atmee.script("POST", SESSIONS_PATH, 503, {"error": "no_capacity", "message": "busy"})
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+
+    async def broken_close() -> None:
+        raise RuntimeError("teardown broke")
+
+    monkeypatch.setattr(avatar.api, "aclose", broken_close)
+    with pytest.raises(atmee.AtmeeNoCapacityError):  # the real cause, not the teardown error
+        await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
