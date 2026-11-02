@@ -1,11 +1,11 @@
 # AGENTS.md — fast setup for humans and coding agents
 
-`livekit-plugins-atmee` renders an Atmee **v1 avatar** — a talking head generated
-from a single portrait — into a LiveKit room, driven by your LiveKit voice agent's
-speech. The plugin targets v1 avatars specifically: `AvatarSession(avatar_version=...)`
-defaults to `"v1"`, and `"v2"` (the next avatar generation, not yet available through
-the plugin) raises `ValueError`. This file gets you from clone to a talking avatar in
-minutes; the README has the full API.
+`livekit-plugins-atmee` renders an Atmee avatar into a LiveKit room, driven by your
+LiveKit voice agent's speech: a **v1 avatar** (a talking head generated from a single
+portrait; the default) or a **v2 avatar** (invite-only; pass
+`AvatarSession(avatar_version="v2")`, whose start may wait minutes for a cold render
+pool). This file gets you from clone to a talking avatar in minutes; the README has
+the full API.
 
 ## 1. Setup (2 minutes)
 

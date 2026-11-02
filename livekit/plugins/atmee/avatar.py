@@ -58,10 +58,13 @@ _TOKEN_TTL_SLACK = timedelta(minutes=10)
 
 
 class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
-    """An Atmee avatar session: render an Atmee **v1 avatar** into your agent's room.
+    """An Atmee avatar session: render an Atmee avatar into your agent's room.
 
-    v1 avatars are talking heads generated from a single portrait (see
-    :meth:`AtmeeAPI.create_avatar`); this plugin targets them specifically.
+    A **v1 avatar** is a talking head generated from a single portrait (see
+    :meth:`AtmeeAPI.create_avatar`); a **v2 avatar** (invite-only) moves as a
+    whole and is created in the Atmee studio, CLI or MCP server. Pass
+    ``avatar_version="v2"`` for one: its render pool can take minutes to start
+    after a quiet period, and the start waits for it.
 
     The avatar joins the room as its own participant (``atmee-avatar-agent``)
     publishing on behalf of your agent; your agent's audio output is replaced
@@ -93,11 +96,11 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         """
         Args:
             avatar_id: the Atmee avatar to render (``AtmeeAPI.create_avatar``).
-            avatar_version: the avatar generation to render. ``"v1"`` (default)
-                is a talking head generated from a single portrait, the only
-                version the plugin renders today; ``"v2"``, Atmee's next
-                generation, is not available through the plugin yet and
-                raises ``ValueError`` right here.
+            avatar_version: the avatar's generation, ``"v1"`` (default) or
+                ``"v2"``. Atmee renders the avatar as what it is either way;
+                the version sets how long :meth:`start` may wait for a render
+                pool that is starting (a minute for v1, five for v2, seven and
+                a half with ``wait_for="avatar_joined"``).
             api_key: your ``sk_atmee_...`` key; defaults to ``ATMEE_API_KEY``.
             api_url: API base; defaults to ``ATMEE_API_URL`` or the Atmee cloud.
             avatar_participant_identity: identity the avatar joins with
@@ -159,7 +162,7 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
 
     @property
     def avatar_version(self) -> AvatarVersion:
-        """The avatar generation this session renders (``"v1"``)."""
+        """The avatar generation this session was started for (``"v1"`` or ``"v2"``)."""
         return self._avatar_version
 
     @property

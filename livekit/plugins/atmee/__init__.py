@@ -14,8 +14,9 @@
 
 """Atmee avatar plugin for LiveKit Agents.
 
-Bring your own LiveKit voice agent; Atmee renders a **v1 avatar** (a talking head
-generated from a single portrait) into your room::
+Bring your own LiveKit voice agent; Atmee renders its avatar into your room: a
+**v1 avatar** (a talking head generated from a single portrait) or a **v2
+avatar** (invite-only; pass ``avatar_version="v2"``)::
 
     from livekit.plugins import atmee
 
@@ -29,9 +30,11 @@ See https://github.com/Atmanity/atmee_livekit_plugin for the architecture notes.
 """
 
 from .api import (
+    CREATABLE_AVATAR_VERSIONS,
     SUPPORTED_AVATAR_VERSIONS,
     AtmeeAPI,
     AtmeeAvatarNotReadyError,
+    AtmeeAvatarWarmingError,
     AtmeeException,
     AtmeeNoCapacityError,
     AvatarInfo,
@@ -42,9 +45,11 @@ from .avatar import AvatarSession
 from .version import __version__
 
 __all__ = [
+    "CREATABLE_AVATAR_VERSIONS",
     "SUPPORTED_AVATAR_VERSIONS",
     "AtmeeAPI",
     "AtmeeAvatarNotReadyError",
+    "AtmeeAvatarWarmingError",
     "AtmeeException",
     "AtmeeNoCapacityError",
     "AvatarInfo",
