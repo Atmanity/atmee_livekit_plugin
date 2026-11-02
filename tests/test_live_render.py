@@ -6,7 +6,7 @@ for ``ATMEE_AVATAR_ID`` with ``ATMEE_AVATAR_VERSION`` (``v1`` by default), plays
 a few seconds of a voice-like signal through the plugin's own audio output,
 and checks that the avatar joins, publishes video and audio, reports the
 playback, and that Atmee settles the session once it is closed. A v2 avatar
-whose render pool scaled to zero can take minutes to start.
+can take minutes to start after a quiet period.
 
 It is skipped unless ``RUN_LIVE_ATMEE_RENDER=1`` and every credential is
 present. Run it by hand::

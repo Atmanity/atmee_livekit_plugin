@@ -76,7 +76,7 @@ Options on `AvatarSession`:
 | Argument | Default | Meaning |
 |---|---|---|
 | `avatar_id` | required | The Atmee avatar to render. |
-| `avatar_version` | `"v1"` | The avatar's generation, `"v1"` or `"v2"`: how long `start()` may wait for its render pool (see [Avatar versions](#avatar-versions)). |
+| `avatar_version` | `"v1"` | The avatar's generation, `"v1"` or `"v2"`: how long `start()` may wait for it to get ready (see [Avatar versions](#avatar-versions)). |
 | `api_key`, `api_url` | `ATMEE_API_KEY`, `ATMEE_API_URL` | Credentials and API base. `api_url` is optional and defaults to production, `https://api.atmanity.us`; set it only to target another environment. |
 | `avatar_participant_identity` | `atmee-avatar-agent` | Identity the avatar joins with; set it when one room hosts several avatars. |
 | `max_duration_seconds` | `3600` | Hard ceiling of the session; also the most it can bill if your agent dies without a trace. |
@@ -94,8 +94,8 @@ Atmee avatars come in generations, and the plugin renders both:
 - **`v1`** — a talking-head avatar generated from one portrait, lip-synced to
   your agent's speech. The default everywhere, so existing code needs no change.
 - **`v2`** — Atmee's next generation (invite-only): the avatar moves as a
-  whole. It renders on a GPU pool that scales to zero, so the first v2 session
-  after a quiet period can take a few minutes to start. Pass
+  whole. The first v2 session after a quiet period can take a few minutes to
+  start. Pass
   `avatar_version="v2"`: `start()` then waits up to 5 minutes (7.5 with
   `wait_for="avatar_joined"`) instead of 1 (3), and while Atmee answers
   `avatar_warming` it asks again after the `Retry-After` it gives. Nothing is
@@ -116,7 +116,7 @@ info.ready                                # built, and for v2, serving a take
 
 The avatar's own configuration decides how Atmee renders it: the version is
 not sent with the start, it sets how long the start may wait. A v2 avatar
-started as `"v1"` still renders as v2, but a cold pool may outlast the v1
+started as `"v1"` still renders as v2, but a slow first start may outlast the v1
 wait; the error then says to pass `avatar_version="v2"`.
 
 `AtmeeAPI.create_avatar()` makes v1 avatars only: a v2 avatar also needs a
@@ -148,8 +148,8 @@ All API failures raise `atmee.AtmeeException` with `status_code`, `code`
 `missing_publish_on_behalf`) and `message`. Subclasses worth handling:
 `AtmeeNoCapacityError` (every rendering worker is busy; check `retry_after`
 and try again later), `AtmeeAvatarNotReadyError` (the avatar has no portrait,
-or a v2 avatar no take, yet) and `AtmeeAvatarWarmingError` (a v2 render pool
-was still starting, or a start was interrupted, when the start's wait ran
+or a v2 avatar no take, yet) and `AtmeeAvatarWarmingError` (a v2 avatar
+was still getting ready, or a start was interrupted, when the start's wait ran
 out; nothing was billed). `avatar_version_unavailable` means the deployment
 renders v1 only.
 

@@ -151,10 +151,10 @@ async def test_a_render_that_could_not_start_yet_is_asked_again(
 async def test_a_v2_avatar_gets_the_longer_start_budget(
     fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The same pool, warming for longer than a v1 start may wait: declared v2,
+    # The same avatar, getting ready for longer than a v1 start may wait: declared v2,
     # the start rides it out; declared v1, it gives up and says what to pass.
     _warming(monkeypatch, {"v1": 0.05, "v2": 5.0})
-    warming = {"error": "avatar_warming", "message": "the v2 render pool is starting"}
+    warming = {"error": "avatar_warming", "message": "the avatar is getting ready"}
     fake_atmee.script("POST", SESSIONS_PATH, 503, warming, headers={"Retry-After": "0"}, times=200)
     api = AtmeeAPI(session=http_session, conn_options=FAST)
     with pytest.raises(atmee.AtmeeAvatarWarmingError, match="pass avatar_version='v2'") as exc:
@@ -517,9 +517,8 @@ def test_an_avatars_version_is_its_engine_and_a_v2_is_ready_once_it_serves_a_tak
     assert serving.ready
 
 
-def test_a_v2_start_may_wait_as_long_as_the_api_says_a_cold_pool_takes() -> None:
-    # The service waits up to 4 minutes for a v2 pool to take the render and up
-    # to 6 for the avatar to join, and asks clients for at least 7 minutes.
+def test_a_v2_start_may_wait_as_long_as_the_api_asks() -> None:
+    # The API asks clients to allow at least 7 minutes for a v2 avatar to join.
     budgets = atmee_api._START_TOTAL_TIMEOUT
     assert budgets["v2"]["initializing"] >= 4 * 60
     assert budgets["v2"]["avatar_joined"] >= 7 * 60

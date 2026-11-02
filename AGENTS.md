@@ -3,8 +3,8 @@
 `livekit-plugins-atmee` renders an Atmee avatar into a LiveKit room, driven by your
 LiveKit voice agent's speech: a **v1 avatar** (a talking head generated from a single
 portrait; the default) or a **v2 avatar** (invite-only; pass
-`AvatarSession(avatar_version="v2")`, whose start may wait minutes for a cold render
-pool). This file gets you from clone to a talking avatar in minutes; the README has
+`AvatarSession(avatar_version="v2")`, whose first start after a quiet period may
+take minutes). This file gets you from clone to a talking avatar in minutes; the README has
 the full API.
 
 ## 1. Setup (2 minutes)

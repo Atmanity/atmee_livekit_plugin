@@ -52,9 +52,9 @@ AvatarVersion = Literal["v1", "v2"]
 
 ``"v1"`` is a talking head generated from a single portrait, lip-synced to the
 agent's speech. ``"v2"`` is Atmee's next generation (invite-only): the avatar
-moves as a whole, rendered on a GPU pool that scales to zero, so the first v2
-session after a quiet period can take a few minutes to start. Which one an
-avatar is was decided when it was created; the API renders it as such.
+moves as a whole, and the first v2 session after a quiet period can take a few
+minutes to start. Which one an avatar is was decided when it was created; the
+API renders it as such.
 """
 
 SUPPORTED_AVATAR_VERSIONS: frozenset[AvatarVersion] = frozenset({"v1", "v2"})
@@ -65,12 +65,11 @@ CREATABLE_AVATAR_VERSIONS: frozenset[AvatarVersion] = frozenset({"v1"})
 also needs a voice and a take built over minutes: create one in the Atmee
 studio, or with the Atmee CLI or MCP server, and render it here by its id."""
 
-# Overall budget of the start call, by avatar version. A v1 worker acknowledges
-# within seconds, and waiting for the avatar to join covers model priming on a
-# cold pod (the server's own join timeout is 90 s) plus the room join. A v2
-# render pool may first have to start: the service waits up to 4 minutes for it
-# to take the render and up to 6 for the avatar to join, or answers
-# `avatar_warming` to be asked again; the budget covers either.
+# Overall budget of the start call, by avatar version. A v1 start is
+# acknowledged within seconds and its avatar joins within a couple of minutes.
+# The first v2 session after a quiet period can take minutes to start; the API
+# asks clients to allow 7 for the avatar to join, and answers `avatar_warming`
+# to be asked again meanwhile.
 _START_TOTAL_TIMEOUT: dict[str, dict[str, float]] = {
     "v1": {"initializing": 60.0, "avatar_joined": 180.0},
     "v2": {"initializing": 300.0, "avatar_joined": 450.0},
@@ -123,7 +122,7 @@ class AtmeeNoCapacityError(AtmeeException):
 
 class AtmeeAvatarWarmingError(AtmeeException):
     """The render could not start yet, and nothing was billed (HTTP 503):
-    ``avatar_warming``, a v2 avatar's render pool is starting, or
+    ``avatar_warming``, a v2 avatar is still getting ready to render, or
     ``avatar_start_interrupted``, the render ended before the avatar joined.
     :meth:`AtmeeAPI.create_avatar_session` asks again by itself within its
     start budget; this is raised only once that budget is spent.
@@ -281,8 +280,8 @@ class AtmeeAPI:
 
         ``avatar_version`` is the avatar's generation, ``"v1"`` or ``"v2"``. The
         API renders the avatar as what it is either way (the request carries no
-        version); the version sets how long the start may take. A v2 render pool
-        that scaled to zero can take minutes: while the API answers
+        version); the version sets how long the start may take. The first v2
+        session after a quiet period can take minutes: while the API answers
         ``avatar_warming`` (or ``avatar_start_interrupted``, nothing billed),
         the start is asked again after its ``Retry-After``, within that budget.
         """
@@ -322,8 +321,8 @@ class AtmeeAPI:
                 if loop.time() + pause >= deadline:
                     if avatar_version == "v1" and e.code == "avatar_warming":
                         raise AtmeeAvatarWarmingError(
-                            f"{e.message}; this is a v2 avatar, whose render pool can take "
-                            "minutes to start: pass avatar_version='v2'",
+                            f"{e.message}; this is a v2 avatar, which can take minutes "
+                            "to start: pass avatar_version='v2'",
                             code=e.code,
                             retry_after=e.retry_after,
                         ) from e
