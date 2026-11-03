@@ -194,17 +194,24 @@ async def test_explicit_v1_is_accepted(
     await avatar.aclose()
 
 
-def test_v2_is_rejected_at_construction(
+async def test_a_v2_avatar_renders_like_a_v1(
     fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
 ) -> None:
-    # v2 is the next avatar generation and not available through the plugin
-    # yet: the constructor says so, before any token is minted or request sent.
-    with pytest.raises(ValueError, match="avatar_version 'v2' is not supported") as exc:
-        atmee.AvatarSession(
-            avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session, avatar_version="v2"
-        )
-    assert "only 'v1'" in str(exc.value)
-    assert fake_atmee.requests == []
+    # The same request and the same audio path: the avatar's own configuration
+    # makes it a v2 render; the session says which it was started for.
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID, "status": "completed"})
+    avatar = atmee.AvatarSession(
+        avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session, avatar_version="v2"
+    )
+    assert avatar.avatar_version == "v2"
+    agent = FakeAgentSession()
+    await avatar.start(agent, FakeRoom())  # type: ignore[arg-type]
+    assert avatar.session_info is not None and avatar.session_info.avatar_version == "v2"
+    body = fake_atmee.calls("POST", SESSIONS_PATH)[0].json
+    assert set(body) == {"livekitUrl", "livekitToken", "agentIdentity", "maxDurationSeconds"}
+    assert len(agent.output.audio_tails) == 1
+    await avatar.aclose()
 
 
 def test_unknown_version_is_rejected_at_construction(http_session: aiohttp.ClientSession) -> None:

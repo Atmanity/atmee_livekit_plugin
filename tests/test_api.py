@@ -8,13 +8,16 @@ import aiohttp
 import pytest
 
 from livekit.agents import APIConnectOptions
+from livekit.plugins import atmee
 from livekit.plugins.atmee import (
+    CREATABLE_AVATAR_VERSIONS,
     SUPPORTED_AVATAR_VERSIONS,
     AtmeeAPI,
     AtmeeAvatarNotReadyError,
     AtmeeException,
     AtmeeNoCapacityError,
 )
+from livekit.plugins.atmee import api as atmee_api
 
 from .conftest import API_KEY, AVATAR_ID, SESSION_ID, FakeAtmee
 
@@ -69,8 +72,9 @@ async def test_create_avatar_session_sends_key_and_payload(
     assert api.api_url == fake_atmee.url
 
 
-def test_only_v1_avatars_are_supported() -> None:
-    assert SUPPORTED_AVATAR_VERSIONS == frozenset({"v1"})
+def test_v1_and_v2_avatars_are_rendered_and_v1_created() -> None:
+    assert SUPPORTED_AVATAR_VERSIONS == frozenset({"v1", "v2"})
+    assert CREATABLE_AVATAR_VERSIONS == frozenset({"v1"})
 
 
 async def test_create_avatar_session_explicit_v1_sends_no_version_field(
@@ -90,20 +94,99 @@ async def test_create_avatar_session_explicit_v1_sends_no_version_field(
     }
 
 
-async def test_create_avatar_session_rejects_v2_before_any_request(
+async def test_create_avatar_session_v2_sends_the_same_request(
     fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
 ) -> None:
+    # The avatar's own configuration decides how it renders: a v2 start is the
+    # same request, and the version is the plugin's (its start budget).
     fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
     api = AtmeeAPI(session=http_session, conn_options=FAST)
-    with pytest.raises(ValueError, match="avatar_version 'v2' is not supported") as exc:
-        await api.create_avatar_session(
-            AVATAR_ID,
-            livekit_url="wss://x",
-            livekit_token="t",
-            avatar_version="v2",
+    info = await api.create_avatar_session(
+        AVATAR_ID, livekit_url="wss://x", livekit_token="t", avatar_version="v2"
+    )
+    assert info.avatar_version == "v2"
+    assert fake_atmee.calls("POST", SESSIONS_PATH)[0].json == {
+        "livekitUrl": "wss://x",
+        "livekitToken": "t",
+    }
+
+
+def _warming(monkeypatch: pytest.MonkeyPatch, budgets: dict[str, float] | None = None) -> None:
+    """Ask again at once after a warming answer, within small start budgets."""
+    monkeypatch.setattr(atmee_api, "_WARMING_RETRY_BOUNDS", (0.005, 0.01))
+    if budgets is not None:
+        monkeypatch.setattr(
+            atmee_api,
+            "_START_TOTAL_TIMEOUT",
+            {v: {"initializing": t, "avatar_joined": t} for v, t in budgets.items()},
         )
-    assert "only 'v1'" in str(exc.value)
-    assert fake_atmee.requests == []
+
+
+@pytest.mark.parametrize("code", ["avatar_warming", "avatar_start_interrupted"])
+async def test_a_render_that_could_not_start_yet_is_asked_again(
+    fake_atmee: FakeAtmee,
+    http_session: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
+    code: str,
+) -> None:
+    # Nothing was reserved: the start is asked again after its Retry-After.
+    _warming(monkeypatch)
+    for _ in range(2):
+        fake_atmee.script(
+            "POST",
+            SESSIONS_PATH,
+            503,
+            {"error": code, "message": "starting"},
+            headers={"Retry-After": "0"},
+        )
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    info = await api.create_avatar_session(
+        AVATAR_ID, livekit_url="wss://x", livekit_token="t", avatar_version="v2"
+    )
+    assert info.session_id == SESSION_ID
+    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 3
+
+
+async def test_a_v2_avatar_gets_the_longer_start_budget(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The same avatar, getting ready for longer than a v1 start may wait: declared v2,
+    # the start rides it out; declared v1, it gives up and says what to pass.
+    _warming(monkeypatch, {"v1": 0.05, "v2": 5.0})
+    warming = {"error": "avatar_warming", "message": "the avatar is getting ready"}
+    fake_atmee.script("POST", SESSIONS_PATH, 503, warming, headers={"Retry-After": "0"}, times=200)
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    with pytest.raises(atmee.AtmeeAvatarWarmingError, match="pass avatar_version='v2'") as exc:
+        await api.create_avatar_session(AVATAR_ID, livekit_url="wss://x", livekit_token="t")
+    assert exc.value.code == "avatar_warming" and exc.value.status_code == 503
+
+    fake_atmee.scripts.clear()
+    fake_atmee.requests.clear()
+    for _ in range(5):
+        fake_atmee.script("POST", SESSIONS_PATH, 503, warming, headers={"Retry-After": "0"})
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    info = await api.create_avatar_session(
+        AVATAR_ID, livekit_url="wss://x", livekit_token="t", avatar_version="v2"
+    )
+    assert info.session_id == SESSION_ID
+    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 6
+
+
+async def test_a_failed_or_unanswered_start_is_never_asked_again(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A 5xx that is no warming answer (a proxy's 504, a server error) may have
+    # reserved a render: asking again could open a second one.
+    _warming(monkeypatch)
+    fake_atmee.script("POST", SESSIONS_PATH, 504, body="Gateway Timeout")
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    with pytest.raises(atmee.AtmeeException) as exc:
+        await api.create_avatar_session(
+            AVATAR_ID, livekit_url="wss://x", livekit_token="t", avatar_version="v2"
+        )
+    assert not isinstance(exc.value, atmee.AtmeeAvatarWarmingError)
+    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 1
 
 
 async def test_create_avatar_session_wait_for_avatar_joined(
@@ -283,11 +366,12 @@ async def test_create_avatar_explicit_v1_keeps_manifest_unchanged(
 async def test_create_avatar_rejects_v2_before_any_request(
     fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, tmp_path: Path
 ) -> None:
+    # A v2 avatar needs a voice and a take built over minutes: made elsewhere, rendered here.
     fake_atmee.script("POST", "/v1/avatars", 201, {"avatarId": AVATAR_ID, "status": "ready"})
     api = AtmeeAPI(session=http_session, conn_options=FAST)
-    with pytest.raises(ValueError, match="avatar_version 'v2' is not supported"):
+    with pytest.raises(ValueError, match="create_avatar makes v1 avatars only"):
         await api.create_avatar("Val", "https://cdn.example/val.jpg", avatar_version="v2")
-    with pytest.raises(ValueError, match="only 'v1'"):
+    with pytest.raises(ValueError, match="Atmee studio, or with the Atmee CLI or MCP server"):
         await api.create_avatar_info("Val", b"jpegbytes", avatar_version="v2")
     missing = tmp_path / "does-not-exist.png"  # never read: the version check comes first
     with pytest.raises(ValueError):
@@ -420,3 +504,22 @@ async def test_plain_503_is_retried_like_any_5xx(
     got = await api.get_avatar_session(SESSION_ID)
     assert got["status"] == "active"
     assert len(fake_atmee.calls("GET", get_path)) == 2
+
+
+def test_an_avatars_version_is_its_engine_and_a_v2_is_ready_once_it_serves_a_take() -> None:
+    v1 = atmee_api._avatar_info({"avatarId": AVATAR_ID, "status": "ready"})
+    assert v1.version == "v1" and v1.ready
+    building = atmee_api._avatar_info({"avatarId": AVATAR_ID, "status": "ready", "engine": "v2"})
+    assert building.version == "v2" and not building.ready  # no take serving yet
+    serving = atmee_api._avatar_info(
+        {"avatarId": AVATAR_ID, "status": "ready", "engine": "v2", "servingCandidateId": "c1"}
+    )
+    assert serving.ready
+
+
+def test_a_v2_start_may_wait_as_long_as_the_api_asks() -> None:
+    # The API asks clients to allow at least 7 minutes for a v2 avatar to join.
+    budgets = atmee_api._START_TOTAL_TIMEOUT
+    assert budgets["v2"]["initializing"] >= 4 * 60
+    assert budgets["v2"]["avatar_joined"] >= 7 * 60
+    assert budgets["v1"]["initializing"] < budgets["v2"]["initializing"]
