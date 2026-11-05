@@ -166,8 +166,14 @@ class AvatarSessionInfo:
     agent_identity: str
     room_name: str
     max_duration_seconds: int
-    billing_mode: str
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+
+    @property
+    def billing_mode(self) -> str:
+        """Deprecated: Atmee bills every session as it runs, so the API's
+        ``billingMode`` no longer tells sessions apart. Read from the raw
+        response while the API still sends it; empty once it does not."""
+        return str(self.raw.get("billingMode", ""))
 
 
 @dataclass
@@ -350,7 +356,6 @@ class AtmeeAPI:
             agent_identity=str(data.get("agentIdentity", "")),
             room_name=str(data.get("roomName", "")),
             max_duration_seconds=int(data.get("maxDurationSeconds") or 0),
-            billing_mode=str(data.get("billingMode", "")),
             raw=data,
         )
 

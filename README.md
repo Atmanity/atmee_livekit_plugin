@@ -139,6 +139,8 @@ The generation is unrelated to `AvatarInfo.kind` (`conversational` |
 `create_avatar_session()` and `create_avatar()`, but ignored, with a logged
 warning; remove it. `AvatarInfo.version` is now an alias of `engine`, and
 `AvatarSession.avatar_version` and `AvatarSessionInfo.avatar_version` are gone.
+`AvatarSessionInfo.billing_mode` is deprecated: Atmee bills every session as it
+runs, so it no longer tells sessions apart.
 
 ### Lifecycle and billing
 
