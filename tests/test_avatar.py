@@ -202,35 +202,59 @@ def test_an_unknown_wait_for_is_rejected_at_construction(
         )
 
 
-async def test_aclose_during_a_pending_start_ends_the_late_session(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("trigger", ["aclose", "agent_session_closed", "start_cancelled"])
+async def test_close_during_a_pending_start_ends_the_late_session(
+    fake_atmee: FakeAtmee, trigger: str
 ) -> None:
-    # A v2 start can wait minutes; the job may shut down meanwhile. The render
-    # the start opens is then ended, and nothing is wired up.
-    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    # A v2 start can wait minutes; meanwhile the job may shut down, the agent
+    # session close, or the caller give up on start(). The request is never
+    # cut off (the render it opens could not be ended): its session is ended
+    # once it answers, and nothing is wired up.
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body(), delay=0.3)
     fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID, "status": "completed"})
-    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
-    requested, release = asyncio.Event(), asyncio.Event()
-    real_create = avatar.api.create_avatar_session
-
-    async def slow_create(*args: Any, **kwargs: Any) -> Any:
-        requested.set()
-        await release.wait()
-        return await real_create(*args, **kwargs)
-
-    monkeypatch.setattr(avatar.api, "create_avatar_session", slow_create)
+    # owns its HTTP session: closing it early would abort the request
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST)
     agent, room = FakeAgentSession(), FakeRoom()
     starting = asyncio.create_task(avatar.start(agent, room))  # type: ignore[arg-type]
-    await requested.wait()
-    await asyncio.wait_for(avatar.aclose(), timeout=1)  # returns at once
-    release.set()
-    with pytest.raises(atmee.AtmeeException) as exc:
-        await starting
-    assert exc.value.code == "closed"
+    await asyncio.wait_for(fake_atmee.arrived[("POST", SESSIONS_PATH)].wait(), timeout=1)
+    if trigger == "start_cancelled":
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+        await asyncio.wait_for(asyncio.gather(*avatar._settle_tasks), timeout=2)
+    else:
+        if trigger == "aclose":
+            await asyncio.wait_for(avatar.aclose(), timeout=0.2)  # never waits for the start
+        else:
+            for handler in list(agent.handlers.get("close", [])):
+                handler(None)
+        with pytest.raises(atmee.AtmeeException) as exc:
+            await starting
+        assert exc.value.code == "closed"
     assert avatar.session_id == SESSION_ID
     assert len(fake_atmee.calls("POST", END_PATH)) == 1
     assert agent.output.audio_tails == []
     assert not room.handlers.get("participant_disconnected")
+
+
+async def test_close_stops_asking_a_warming_avatar_again(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+) -> None:
+    # Nothing is reserved between warming answers: a close ends the wait at
+    # once and never sends the request that would open a render.
+    warming = {"error": "avatar_warming", "message": "getting ready"}
+    fake_atmee.script("POST", SESSIONS_PATH, 503, warming, headers={"Retry-After": "30"})
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    starting = asyncio.create_task(avatar.start(FakeAgentSession(), FakeRoom()))  # type: ignore[arg-type]
+    await asyncio.wait_for(fake_atmee.arrived[("POST", SESSIONS_PATH)].wait(), timeout=1)
+    await asyncio.sleep(0.05)  # now waiting out the Retry-After
+    await asyncio.wait_for(avatar.aclose(), timeout=0.2)
+    with pytest.raises(atmee.AtmeeException) as exc:
+        await asyncio.wait_for(starting, timeout=1)
+    assert exc.value.code == "closed"
+    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 1
+    assert fake_atmee.calls("POST", END_PATH) == []
 
 
 async def test_aclose_removes_the_avatar_while_the_end_call_is_slow(

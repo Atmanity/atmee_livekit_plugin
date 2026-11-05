@@ -35,6 +35,7 @@ class Scripted:
     payload: Any = None
     body: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
+    delay: float = 0.0
 
 
 class FakeAtmee:
@@ -44,6 +45,8 @@ class FakeAtmee:
     def __init__(self) -> None:
         self.requests: list[Recorded] = []
         self.scripts: dict[tuple[str, str], deque[Scripted]] = defaultdict(deque)
+        # set once a request for (method, path) arrived
+        self.arrived: dict[tuple[str, str], asyncio.Event] = defaultdict(asyncio.Event)
         self.url = ""
 
     def script(
@@ -56,9 +59,12 @@ class FakeAtmee:
         body: str | None = None,
         headers: dict[str, str] | None = None,
         times: int = 1,
+        delay: float = 0.0,
     ) -> None:
         for _ in range(times):
-            self.scripts[(method, path)].append(Scripted(status, payload, body, headers or {}))
+            self.scripts[(method, path)].append(
+                Scripted(status, payload, body, headers or {}, delay)
+            )
 
     def calls(self, method: str, path: str) -> list[Recorded]:
         return [r for r in self.requests if r.method == method and r.path == path]
@@ -86,11 +92,13 @@ class FakeAtmee:
                 else:
                     rec.form[name] = (await part.read(decode=False)).decode()
         self.requests.append(rec)
+        self.arrived[(request.method, request.path)].set()
 
         queue = self.scripts.get((request.method, request.path))
         if not queue:
             return web.json_response({"error": "unscripted", "message": request.path}, status=404)
         s = queue.popleft()
+        await asyncio.sleep(s.delay)
         if s.payload is not None:
             return web.Response(
                 status=s.status,

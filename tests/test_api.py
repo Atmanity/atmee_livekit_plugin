@@ -106,7 +106,9 @@ def _warming(monkeypatch: pytest.MonkeyPatch, budget: float | None = None) -> No
     monkeypatch.setattr(atmee_api, "_WARMING_RETRY_BOUNDS", (0.005, 0.01))
     if budget is not None:
         monkeypatch.setattr(
-            atmee_api, "_START_TOTAL_TIMEOUT", {"initializing": budget, "avatar_joined": budget}
+            atmee_api,
+            "_START_TOTAL_TIMEOUT",
+            {g: {"initializing": budget, "avatar_joined": budget} for g in ("v1", "v2")},
         )
 
 
@@ -485,11 +487,46 @@ def test_an_avatars_engine_and_readiness(
     assert info.version == (engine or "v1")  # deprecated alias
 
 
-def test_every_start_may_wait_as_long_as_a_v2_avatar_needs() -> None:
+def test_a_v2_start_may_wait_as_long_as_the_api_asks() -> None:
     # The API asks clients to allow at least 7 minutes for a v2 avatar to join.
     budgets = atmee_api._START_TOTAL_TIMEOUT
-    assert budgets["initializing"] >= 4 * 60
-    assert budgets["avatar_joined"] >= 7 * 60
+    assert budgets["v2"]["initializing"] >= 4 * 60
+    assert budgets["v2"]["avatar_joined"] >= 7 * 60
+    assert budgets["v1"]["avatar_joined"] < budgets["v2"]["avatar_joined"]
+
+
+@pytest.mark.parametrize(
+    ("avatar", "asks"),
+    [
+        ((200, {"avatarId": AVATAR_ID, "status": "ready", "engine": "v1"}), 1),
+        ((200, {"avatarId": AVATAR_ID, "status": "ready", "engine": "v2hd"}), 3),
+        ((403, {"error": "forbidden"}), 3),  # unreadable: allow for a v2 start
+    ],
+)
+async def test_the_start_budget_follows_the_avatars_engine(
+    fake_atmee: FakeAtmee,
+    http_session: aiohttp.ClientSession,
+    monkeypatch: pytest.MonkeyPatch,
+    avatar: tuple[int, Any],
+    asks: int,
+) -> None:
+    # A v1 start that is not answered in time gives up after the v1 budget,
+    # not the minutes a v2 avatar's first start may need.
+    monkeypatch.setattr(atmee_api, "_WARMING_RETRY_BOUNDS", (0.05, 0.05))
+    budgets = {"v1": {"initializing": 0.01}, "v2": {"initializing": 5.0}}
+    monkeypatch.setattr(atmee_api, "_START_TOTAL_TIMEOUT", budgets)
+    fake_atmee.script("GET", f"/v1/avatars/{AVATAR_ID}", *avatar)
+    warming = {"error": "avatar_warming", "message": "getting ready"}
+    fake_atmee.script("POST", SESSIONS_PATH, 503, warming, times=2)
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    if asks == 1:
+        with pytest.raises(atmee.AtmeeAvatarWarmingError):
+            await api.create_avatar_session(AVATAR_ID, livekit_url="wss://x", livekit_token="t")
+    else:
+        info = await api.create_avatar_session(AVATAR_ID, livekit_url="wss://x", livekit_token="t")
+        assert info.session_id == SESSION_ID
+    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == asks
 
 
 @pytest.mark.parametrize("wait_for", ["joined", "", "AVATAR_JOINED"])

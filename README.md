@@ -67,8 +67,8 @@ async def entrypoint(ctx: agents.JobContext):
 ```
 
 `start()` returns as soon as Atmee's rendering worker acknowledged the start
-(about a second); the avatar's video and audio tracks appear in the room a few
-seconds later, published by the participant `atmee-avatar-agent`. Your agent
+(a second or two for a v1 avatar; see [Avatar versions](#avatar-versions) for
+v2); the avatar's video and audio tracks appear in the room a few seconds later, published by the participant `atmee-avatar-agent`. Your agent
 publishes no audio of its own — the avatar speaks for it, lips in sync.
 
 Options on `AvatarSession`:
@@ -95,12 +95,33 @@ Atmee avatars come in generations, and the plugin renders both by their id:
 - **v2**: Atmee's next generation (invite-only), where the avatar moves as a
   whole.
 
-The avatar decides how it renders, so there is nothing to pass. A v1 start is
-acknowledged within seconds. The first v2 session after a quiet period can take
-a few minutes to start, so `start()` waits up to 5 minutes (7.5 with
-`wait_for="avatar_joined"`), and while Atmee answers `avatar_warming` it asks
-again after the `Retry-After` it gives. Nothing is billed until the render
-starts.
+The avatar decides how it renders, so there is nothing to pass. `start()` first
+reads the avatar's generation to know how long to wait. A v1 start is
+acknowledged within seconds, and `start()` gives it up to 1 minute (3 with
+`wait_for="avatar_joined"`). The first v2 session after a quiet period can take
+a few minutes to start, so a v2 start may take up to 5 minutes (7.5), and while
+Atmee answers `avatar_warming` it asks again after the `Retry-After` it gives.
+Nothing is billed until the render starts.
+
+### Start the agent first
+
+Started before `session.start()`, the avatar carries the agent's voice from the
+first word, but a slow v2 start keeps the user waiting with no agent. To let the
+agent talk right away and give it a face once the avatar is in the room, start
+the avatar after the session, without awaiting it:
+
+```python
+await session.start(agent=MyAgent(), room=ctx.room)   # the agent speaks with its own voice
+
+async def attach_avatar() -> None:
+    avatar = atmee.AvatarSession(avatar_id=avatar_id, wait_for="avatar_joined")
+    try:
+        await avatar.start(session, room=ctx.room)    # the agent's voice moves to the avatar
+    except atmee.AtmeeException:
+        logger.warning("continuing without an avatar", exc_info=True)
+
+attach_task = asyncio.create_task(attach_avatar())    # keep a reference
+```
 
 ```python
 info = await atmee.AtmeeAPI().get_avatar(avatar_id)
@@ -130,8 +151,9 @@ minute. It stops when
 - `aclose()` runs — registered automatically as a job shutdown callback; it
   removes the avatar participant from your room and ends the session side by
   side, so the avatar leaves at once. If it runs while `start()` is still
-  waiting, the render that start opens is ended and `start()` raises an
-  `AtmeeException` with `code="closed"`,
+  waiting, it asks no more, the render that start opens is ended and `start()`
+  raises an `AtmeeException` with `code="closed"`. A cancelled `start()` lets
+  its request finish in the background and ends the render it opens,
 - the rendering worker itself dies or loses contact: it proves it is alive
   once a minute, and a session silent for a few minutes is closed and billed
   only up to the last proof,
