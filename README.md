@@ -76,11 +76,10 @@ Options on `AvatarSession`:
 | Argument | Default | Meaning |
 |---|---|---|
 | `avatar_id` | required | The Atmee avatar to render. |
-| `avatar_version` | `"v1"` | The avatar's generation, `"v1"` or `"v2"`: how long `start()` may wait for it to get ready (see [Avatar versions](#avatar-versions)). |
 | `api_key`, `api_url` | `ATMEE_API_KEY`, `ATMEE_API_URL` | Credentials and API base. `api_url` is optional and defaults to production, `https://api.atmanity.us`; set it only to target another environment. |
 | `avatar_participant_identity` | `atmee-avatar-agent` | Identity the avatar joins with; set it when one room hosts several avatars. |
 | `max_duration_seconds` | `3600` | Hard ceiling of the session; also the most it can bill if your agent dies without a trace. |
-| `wait_for` | `"initializing"` | `"avatar_joined"` makes `start()` block until the avatar is in the room. |
+| `wait_for` | `"initializing"` | `"avatar_joined"` makes `start()` block until the avatar is in the room. Anything else raises `ValueError`. |
 | `metadata` | `None` | Free-form JSON stored with the session on the Atmee side. |
 
 `avatar.session_id` and `avatar.session_info` hold the Atmee session after
@@ -89,42 +88,36 @@ participant leaves while your agent is still running.
 
 ### Avatar versions
 
-Atmee avatars come in generations, and the plugin renders both:
+Atmee avatars come in generations, and the plugin renders both by their id:
 
-- **`v1`** — a talking-head avatar generated from one portrait, lip-synced to
-  your agent's speech. The default everywhere, so existing code needs no change.
-- **`v2`** — Atmee's next generation (invite-only): the avatar moves as a
-  whole. The first v2 session after a quiet period can take a few minutes to
-  start. Pass
-  `avatar_version="v2"`: `start()` then waits up to 5 minutes (7.5 with
-  `wait_for="avatar_joined"`) instead of 1 (3), and while Atmee answers
-  `avatar_warming` it asks again after the `Retry-After` it gives. Nothing is
-  billed until the render starts.
+- **v1**: a talking-head avatar generated from one portrait, lip-synced to
+  your agent's speech.
+- **v2**: Atmee's next generation (invite-only), where the avatar moves as a
+  whole.
+
+The avatar decides how it renders, so there is nothing to pass. A v1 start is
+acknowledged within seconds. The first v2 session after a quiet period can take
+a few minutes to start, so `start()` waits up to 5 minutes (7.5 with
+`wait_for="avatar_joined"`), and while Atmee answers `avatar_warming` it asks
+again after the `Retry-After` it gives. Nothing is billed until the render
+starts.
 
 ```python
-from livekit.plugins import atmee
-
-avatar = atmee.AvatarSession(avatar_id=..., avatar_version="v2")
-avatar.avatar_version                     # "v2"
-avatar.session_info.avatar_version        # "v2", after start()
-atmee.SUPPORTED_AVATAR_VERSIONS           # frozenset({"v1", "v2"})
-
 info = await atmee.AtmeeAPI().get_avatar(avatar_id)
-info.version                              # "v2": the avatar's engine, as the API reports it
+info.engine                               # "v1", "v2" or "v2hd", as the API reports it
 info.ready                                # built, and for v2, serving a take
 ```
 
-The avatar's own configuration decides how Atmee renders it: the version is
-not sent with the start, it sets how long the start may wait. A v2 avatar
-started as `"v1"` still renders as v2, but a slow first start may outlast the v1
-wait; the error then says to pass `avatar_version="v2"`.
+`AtmeeAPI.create_avatar()` makes v1 avatars from one portrait. A v2 avatar
+also needs a voice and a take built over minutes: create one in the Atmee
+studio, or with the Atmee CLI or MCP server, and render it here by its id.
+The generation is unrelated to `AvatarInfo.kind` (`conversational` |
+`render_only`), which says whether an avatar has a voice and persona.
 
-`AtmeeAPI.create_avatar()` makes v1 avatars only: a v2 avatar also needs a
-voice and a take built over minutes. Create one in the Atmee studio, or with
-the Atmee CLI or MCP server, and render it here by its id
-(`atmee.CREATABLE_AVATAR_VERSIONS` is `frozenset({"v1"})`). The version is
-unrelated to `AvatarInfo.kind` (`conversational` | `render_only`), which says
-whether an avatar has a voice and persona.
+**Upgrading from 0.2:** `avatar_version` is still accepted by `AvatarSession`,
+`create_avatar_session()` and `create_avatar()`, but ignored, with a logged
+warning; remove it. `AvatarInfo.version` is now an alias of `engine`, and
+`AvatarSession.avatar_version` and `AvatarSessionInfo.avatar_version` are gone.
 
 ### Lifecycle and billing
 
@@ -135,7 +128,10 @@ minute. It stops when
   and reports the end itself — a crashed agent stops being billed within
   seconds),
 - `aclose()` runs — registered automatically as a job shutdown callback; it
-  ends the session and removes the avatar participant from your room,
+  removes the avatar participant from your room and ends the session side by
+  side, so the avatar leaves at once. If it runs while `start()` is still
+  waiting, the render that start opens is ended and `start()` raises an
+  `AtmeeException` with `code="closed"`,
 - the rendering worker itself dies or loses contact: it proves it is alive
   once a minute, and a session silent for a few minutes is closed and billed
   only up to the last proof,
@@ -150,8 +146,7 @@ All API failures raise `atmee.AtmeeException` with `status_code`, `code`
 and try again later), `AtmeeAvatarNotReadyError` (the avatar has no portrait,
 or a v2 avatar no take, yet) and `AtmeeAvatarWarmingError` (a v2 avatar
 was still getting ready, or a start was interrupted, when the start's wait ran
-out; nothing was billed). `avatar_version_unavailable` means the deployment
-renders v1 only.
+out; nothing was billed).
 
 ## Examples
 

@@ -68,57 +68,45 @@ async def test_create_avatar_session_sends_key_and_payload(
     assert info.room_name == "dev-room-42"
     assert info.max_duration_seconds == 3600
     assert info.billing_mode == "metered"
-    assert info.avatar_version == "v1"
     assert api.api_url == fake_atmee.url
 
 
-def test_v1_and_v2_avatars_are_rendered_and_v1_created() -> None:
+def test_the_0_2_version_names_are_still_importable() -> None:
     assert SUPPORTED_AVATAR_VERSIONS == frozenset({"v1", "v2"})
     assert CREATABLE_AVATAR_VERSIONS == frozenset({"v1"})
 
 
-async def test_create_avatar_session_explicit_v1_sends_no_version_field(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+@pytest.mark.parametrize("avatar_version", ["v1", "v2"])
+async def test_avatar_version_is_accepted_ignored_and_warned_about(
+    fake_atmee: FakeAtmee,
+    http_session: aiohttp.ClientSession,
+    caplog: pytest.LogCaptureFixture,
+    avatar_version: str,
 ) -> None:
-    # The API contract has no version field: the version is plugin-side only
-    # and the request body is byte-for-byte what it was before.
+    # Code written for 0.2.0 keeps working: the avatar's own engine decides how
+    # it renders, so the request is the same and names no version.
     fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
     api = AtmeeAPI(session=http_session, conn_options=FAST)
-    info = await api.create_avatar_session(
-        AVATAR_ID, livekit_url="wss://x", livekit_token="t", avatar_version="v1"
-    )
-    assert info.avatar_version == "v1"
+    with caplog.at_level("WARNING", logger="livekit.plugins.atmee"):
+        info = await api.create_avatar_session(
+            AVATAR_ID, livekit_url="wss://x", livekit_token="t", avatar_version=avatar_version
+        )
+    assert info.session_id == SESSION_ID
     assert fake_atmee.calls("POST", SESSIONS_PATH)[0].json == {
         "livekitUrl": "wss://x",
         "livekitToken": "t",
     }
+    assert [r.getMessage() for r in caplog.records].count(
+        "avatar_version is deprecated and ignored, the avatar's own engine decides how it renders"
+    ) == 1
 
 
-async def test_create_avatar_session_v2_sends_the_same_request(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
-) -> None:
-    # The avatar's own configuration decides how it renders: a v2 start is the
-    # same request, and the version is the plugin's (its start budget).
-    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
-    api = AtmeeAPI(session=http_session, conn_options=FAST)
-    info = await api.create_avatar_session(
-        AVATAR_ID, livekit_url="wss://x", livekit_token="t", avatar_version="v2"
-    )
-    assert info.avatar_version == "v2"
-    assert fake_atmee.calls("POST", SESSIONS_PATH)[0].json == {
-        "livekitUrl": "wss://x",
-        "livekitToken": "t",
-    }
-
-
-def _warming(monkeypatch: pytest.MonkeyPatch, budgets: dict[str, float] | None = None) -> None:
+def _warming(monkeypatch: pytest.MonkeyPatch, budget: float | None = None) -> None:
     """Ask again at once after a warming answer, within small start budgets."""
     monkeypatch.setattr(atmee_api, "_WARMING_RETRY_BOUNDS", (0.005, 0.01))
-    if budgets is not None:
+    if budget is not None:
         monkeypatch.setattr(
-            atmee_api,
-            "_START_TOTAL_TIMEOUT",
-            {v: {"initializing": t, "avatar_joined": t} for v, t in budgets.items()},
+            atmee_api, "_START_TOTAL_TIMEOUT", {"initializing": budget, "avatar_joined": budget}
         )
 
 
@@ -141,36 +129,22 @@ async def test_a_render_that_could_not_start_yet_is_asked_again(
         )
     fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
     api = AtmeeAPI(session=http_session, conn_options=FAST)
-    info = await api.create_avatar_session(
-        AVATAR_ID, livekit_url="wss://x", livekit_token="t", avatar_version="v2"
-    )
+    info = await api.create_avatar_session(AVATAR_ID, livekit_url="wss://x", livekit_token="t")
     assert info.session_id == SESSION_ID
     assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 3
 
 
-async def test_a_v2_avatar_gets_the_longer_start_budget(
+async def test_a_start_still_warming_when_its_budget_runs_out_raises(
     fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The same avatar, getting ready for longer than a v1 start may wait: declared v2,
-    # the start rides it out; declared v1, it gives up and says what to pass.
-    _warming(monkeypatch, {"v1": 0.05, "v2": 5.0})
+    _warming(monkeypatch, 0.05)
     warming = {"error": "avatar_warming", "message": "the avatar is getting ready"}
     fake_atmee.script("POST", SESSIONS_PATH, 503, warming, headers={"Retry-After": "0"}, times=200)
     api = AtmeeAPI(session=http_session, conn_options=FAST)
-    with pytest.raises(atmee.AtmeeAvatarWarmingError, match="pass avatar_version='v2'") as exc:
+    with pytest.raises(atmee.AtmeeAvatarWarmingError) as exc:
         await api.create_avatar_session(AVATAR_ID, livekit_url="wss://x", livekit_token="t")
     assert exc.value.code == "avatar_warming" and exc.value.status_code == 503
-
-    fake_atmee.scripts.clear()
-    fake_atmee.requests.clear()
-    for _ in range(5):
-        fake_atmee.script("POST", SESSIONS_PATH, 503, warming, headers={"Retry-After": "0"})
-    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
-    info = await api.create_avatar_session(
-        AVATAR_ID, livekit_url="wss://x", livekit_token="t", avatar_version="v2"
-    )
-    assert info.session_id == SESSION_ID
-    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 6
+    assert len(fake_atmee.calls("POST", SESSIONS_PATH)) >= 2
 
 
 async def test_a_failed_or_unanswered_start_is_never_asked_again(
@@ -182,9 +156,7 @@ async def test_a_failed_or_unanswered_start_is_never_asked_again(
     fake_atmee.script("POST", SESSIONS_PATH, 504, body="Gateway Timeout")
     api = AtmeeAPI(session=http_session, conn_options=FAST)
     with pytest.raises(atmee.AtmeeException) as exc:
-        await api.create_avatar_session(
-            AVATAR_ID, livekit_url="wss://x", livekit_token="t", avatar_version="v2"
-        )
+        await api.create_avatar_session(AVATAR_ID, livekit_url="wss://x", livekit_token="t")
     assert not isinstance(exc.value, atmee.AtmeeAvatarWarmingError)
     assert len(fake_atmee.calls("POST", SESSIONS_PATH)) == 1
 
@@ -341,42 +313,30 @@ async def test_create_avatar_reports_v1_by_default(
     )
     api = AtmeeAPI(session=http_session, conn_options=FAST)
     info = await api.create_avatar_info("Val", b"jpegbytes")
-    # `kind` comes from the API (voice/persona or not); `version` is the avatar
-    # generation, filled in by the plugin because the API reports none.
+    # `kind` comes from the API (voice/persona or not); the API names no engine
+    # here, and the deprecated `version` falls back to v1.
     assert info.kind == "render_only"
-    assert info.version == "v1"
+    assert info.engine is None and info.version == "v1"
     assert "version" not in info.raw
     assert set(fake_atmee.calls("POST", "/v1/avatars")[0].form) == {"name", "file"}
 
 
-async def test_create_avatar_explicit_v1_keeps_manifest_unchanged(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+@pytest.mark.parametrize("avatar_version", ["v1", "v2"])
+async def test_create_avatar_ignores_avatar_version(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, avatar_version: str
 ) -> None:
+    # create_avatar makes a v1 avatar from one portrait; the deprecated
+    # argument is accepted and changes nothing in the manifest.
     fake_atmee.script("POST", "/v1/avatars", 201, {"avatarId": AVATAR_ID, "status": "ready"})
     api = AtmeeAPI(session=http_session, conn_options=FAST)
-    info = await api.create_avatar_info("Val", "https://cdn.example/val.jpg", avatar_version="v1")
-    assert info.version == "v1"
+    await api.create_avatar_info(
+        "Val", "https://cdn.example/val.jpg", avatar_version=avatar_version
+    )
     assert fake_atmee.calls("POST", "/v1/avatars")[0].json == {
         "schemaVersion": 1,
         "name": "Val",
         "assets": {"image": {"url": "https://cdn.example/val.jpg"}},
     }
-
-
-async def test_create_avatar_rejects_v2_before_any_request(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, tmp_path: Path
-) -> None:
-    # A v2 avatar needs a voice and a take built over minutes: made elsewhere, rendered here.
-    fake_atmee.script("POST", "/v1/avatars", 201, {"avatarId": AVATAR_ID, "status": "ready"})
-    api = AtmeeAPI(session=http_session, conn_options=FAST)
-    with pytest.raises(ValueError, match="create_avatar makes v1 avatars only"):
-        await api.create_avatar("Val", "https://cdn.example/val.jpg", avatar_version="v2")
-    with pytest.raises(ValueError, match="Atmee studio, or with the Atmee CLI or MCP server"):
-        await api.create_avatar_info("Val", b"jpegbytes", avatar_version="v2")
-    missing = tmp_path / "does-not-exist.png"  # never read: the version check comes first
-    with pytest.raises(ValueError):
-        await api.create_avatar("Val", missing, avatar_version="v2")
-    assert fake_atmee.requests == []
 
 
 async def test_create_avatar_from_bytes(
@@ -506,20 +466,42 @@ async def test_plain_503_is_retried_like_any_5xx(
     assert len(fake_atmee.calls("GET", get_path)) == 2
 
 
-def test_an_avatars_version_is_its_engine_and_a_v2_is_ready_once_it_serves_a_take() -> None:
-    v1 = atmee_api._avatar_info({"avatarId": AVATAR_ID, "status": "ready"})
-    assert v1.version == "v1" and v1.ready
-    building = atmee_api._avatar_info({"avatarId": AVATAR_ID, "status": "ready", "engine": "v2"})
-    assert building.version == "v2" and not building.ready  # no take serving yet
-    serving = atmee_api._avatar_info(
-        {"avatarId": AVATAR_ID, "status": "ready", "engine": "v2", "servingCandidateId": "c1"}
-    )
-    assert serving.ready
+@pytest.mark.parametrize(
+    ("raw", "engine", "ready"),
+    [
+        ({"status": "ready"}, None, True),
+        ({"status": "ready", "engine": "v1"}, "v1", True),
+        ({"status": "ready", "engine": "v2"}, "v2", False),  # no take serving yet
+        ({"status": "ready", "engine": "v2", "servingCandidateId": "c1"}, "v2", True),
+        ({"status": "ready", "engine": "v2hd", "servingCandidateId": "c1"}, "v2hd", True),
+        ({"status": "draft", "engine": "v1"}, "v1", False),
+    ],
+)
+def test_an_avatars_engine_and_readiness(
+    raw: dict[str, Any], engine: str | None, ready: bool
+) -> None:
+    info = atmee_api._avatar_info({"avatarId": AVATAR_ID, **raw})
+    assert info.engine == engine and info.ready is ready
+    assert info.version == (engine or "v1")  # deprecated alias
 
 
-def test_a_v2_start_may_wait_as_long_as_the_api_asks() -> None:
+def test_every_start_may_wait_as_long_as_a_v2_avatar_needs() -> None:
     # The API asks clients to allow at least 7 minutes for a v2 avatar to join.
     budgets = atmee_api._START_TOTAL_TIMEOUT
-    assert budgets["v2"]["initializing"] >= 4 * 60
-    assert budgets["v2"]["avatar_joined"] >= 7 * 60
-    assert budgets["v1"]["initializing"] < budgets["v2"]["initializing"]
+    assert budgets["initializing"] >= 4 * 60
+    assert budgets["avatar_joined"] >= 7 * 60
+
+
+@pytest.mark.parametrize("wait_for", ["joined", "", "AVATAR_JOINED"])
+async def test_an_unknown_wait_for_is_rejected_before_any_request(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, wait_for: str
+) -> None:
+    api = AtmeeAPI(session=http_session, conn_options=FAST)
+    with pytest.raises(ValueError, match="wait_for must be one of"):
+        await api.create_avatar_session(
+            AVATAR_ID,
+            livekit_url="wss://x",
+            livekit_token="t",
+            wait_for=wait_for,  # type: ignore[arg-type]
+        )
+    assert fake_atmee.requests == []

@@ -16,7 +16,7 @@
 
 Bring your own LiveKit voice agent; Atmee renders its avatar into your room: a
 **v1 avatar** (a talking head generated from a single portrait) or a **v2
-avatar** (invite-only; pass ``avatar_version="v2"``)::
+avatar** (invite-only). Either renders by its id; the avatar decides which::
 
     from livekit.plugins import atmee
 

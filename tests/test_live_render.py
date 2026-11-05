@@ -2,7 +2,7 @@
 
 A manual/live check, not part of the normal suite, and with no model behind it:
 it connects to a real LiveKit room as the agent, starts an ``AvatarSession``
-for ``ATMEE_AVATAR_ID`` with ``ATMEE_AVATAR_VERSION`` (``v1`` by default), plays
+for ``ATMEE_AVATAR_ID`` (any avatar, v1 or v2: the avatar decides), plays
 a few seconds of a voice-like signal through the plugin's own audio output,
 and checks that the avatar joins, publishes video and audio, reports the
 playback, and that Atmee settles the session once it is closed. A v2 avatar
@@ -12,7 +12,7 @@ It is skipped unless ``RUN_LIVE_ATMEE_RENDER=1`` and every credential is
 present. Run it by hand::
 
     RUN_LIVE_ATMEE_RENDER=1 \\
-    ATMEE_API_KEY=sk_atmee_... ATMEE_AVATAR_ID=... ATMEE_AVATAR_VERSION=v2 \\
+    ATMEE_API_KEY=sk_atmee_... ATMEE_AVATAR_ID=... \\
     LIVEKIT_URL=wss://... LIVEKIT_API_KEY=... LIVEKIT_API_SECRET=... \\
     uv run pytest tests/test_live_render.py -m live -s
 
@@ -70,8 +70,6 @@ async def test_the_avatar_renders_and_plays_what_the_agent_says() -> None:
     from livekit.agents import AgentSession
     from livekit.plugins import atmee
 
-    version = os.getenv("ATMEE_AVATAR_VERSION", "v1")
-    assert version in atmee.SUPPORTED_AVATAR_VERSIONS
     room_name = f"atmee-live-render-{uuid.uuid4().hex[:8]}"
     token = (
         api.AccessToken(os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"])
@@ -102,7 +100,6 @@ async def test_the_avatar_renders_and_plays_what_the_agent_says() -> None:
     await room.connect(os.environ["LIVEKIT_URL"], token)
     avatar = atmee.AvatarSession(
         avatar_id=os.environ["ATMEE_AVATAR_ID"],
-        avatar_version=version,  # type: ignore[arg-type]
         wait_for="avatar_joined",
         max_duration_seconds=300,
     )
@@ -111,7 +108,6 @@ async def test_the_avatar_renders_and_plays_what_the_agent_says() -> None:
         await avatar.start(session, room)
         assert avatar.session_info is not None
         assert avatar.session_info.status == "avatar_joined"
-        assert avatar.session_info.avatar_version == version
 
         output = session.output.audio
         assert output is not None

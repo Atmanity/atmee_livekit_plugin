@@ -161,67 +161,109 @@ def test_avatar_id_required() -> None:
         atmee.AvatarSession(avatar_id="")
 
 
-async def test_avatar_version_defaults_to_v1(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
+@pytest.mark.parametrize("avatar_version", ["v1", "v2", "v3"])
+async def test_avatar_version_is_accepted_but_ignored(
+    fake_atmee: FakeAtmee,
+    http_session: aiohttp.ClientSession,
+    caplog: pytest.LogCaptureFixture,
+    avatar_version: str,
 ) -> None:
+    # Code written for 0.2.0 keeps working: the avatar's own engine decides how
+    # it renders, so any avatar renders the same way and the request names no version.
     fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
     fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID, "status": "completed"})
-    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
-    assert avatar.avatar_version == "v1"
-
-    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
-
-    assert avatar.session_info is not None
-    assert avatar.session_info.avatar_version == "v1"
-    # The API has no version field: the request body is unchanged.
-    body = fake_atmee.calls("POST", SESSIONS_PATH)[0].json
-    assert set(body) == {"livekitUrl", "livekitToken", "agentIdentity", "maxDurationSeconds"}
-    await avatar.aclose()
-
-
-async def test_explicit_v1_is_accepted(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
-) -> None:
-    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
-    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID, "status": "completed"})
-    avatar = atmee.AvatarSession(
-        avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session, avatar_version="v1"
-    )
-    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
-    assert avatar.avatar_version == "v1"
-    assert avatar.session_info is not None and avatar.session_info.avatar_version == "v1"
-    assert "avatarVersion" not in fake_atmee.calls("POST", SESSIONS_PATH)[0].json
-    await avatar.aclose()
-
-
-async def test_a_v2_avatar_renders_like_a_v1(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
-) -> None:
-    # The same request and the same audio path: the avatar's own configuration
-    # makes it a v2 render; the session says which it was started for.
-    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
-    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID, "status": "completed"})
-    avatar = atmee.AvatarSession(
-        avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session, avatar_version="v2"
-    )
-    assert avatar.avatar_version == "v2"
-    agent = FakeAgentSession()
-    await avatar.start(agent, FakeRoom())  # type: ignore[arg-type]
-    assert avatar.session_info is not None and avatar.session_info.avatar_version == "v2"
+    with caplog.at_level("WARNING", logger="livekit.plugins.atmee"):
+        avatar = atmee.AvatarSession(
+            avatar_id=AVATAR_ID,
+            conn_options=FAST,
+            http_session=http_session,
+            avatar_version=avatar_version,
+        )
+        agent = FakeAgentSession()
+        await avatar.start(agent, FakeRoom())  # type: ignore[arg-type]
+    warned = [r for r in caplog.records if "avatar_version is deprecated" in r.getMessage()]
+    assert len(warned) == 1  # at construction; the start does not warn again
     body = fake_atmee.calls("POST", SESSIONS_PATH)[0].json
     assert set(body) == {"livekitUrl", "livekitToken", "agentIdentity", "maxDurationSeconds"}
     assert len(agent.output.audio_tails) == 1
     await avatar.aclose()
 
 
-def test_unknown_version_is_rejected_at_construction(http_session: aiohttp.ClientSession) -> None:
-    with pytest.raises(ValueError, match="avatar_version 'v3' is not supported"):
+@pytest.mark.parametrize("wait_for", ["joined", ""])
+def test_an_unknown_wait_for_is_rejected_at_construction(
+    http_session: aiohttp.ClientSession, wait_for: str
+) -> None:
+    with pytest.raises(ValueError, match="wait_for must be one of"):
         atmee.AvatarSession(
             avatar_id=AVATAR_ID,
             conn_options=FAST,
             http_session=http_session,
-            avatar_version="v3",  # type: ignore[arg-type]
+            wait_for=wait_for,  # type: ignore[arg-type]
         )
+
+
+async def test_aclose_during_a_pending_start_ends_the_late_session(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A v2 start can wait minutes; the job may shut down meanwhile. The render
+    # the start opens is then ended, and nothing is wired up.
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    fake_atmee.script("POST", END_PATH, 200, {"sessionId": SESSION_ID, "status": "completed"})
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    requested, release = asyncio.Event(), asyncio.Event()
+    real_create = avatar.api.create_avatar_session
+
+    async def slow_create(*args: Any, **kwargs: Any) -> Any:
+        requested.set()
+        await release.wait()
+        return await real_create(*args, **kwargs)
+
+    monkeypatch.setattr(avatar.api, "create_avatar_session", slow_create)
+    agent, room = FakeAgentSession(), FakeRoom()
+    starting = asyncio.create_task(avatar.start(agent, room))  # type: ignore[arg-type]
+    await requested.wait()
+    await asyncio.wait_for(avatar.aclose(), timeout=1)  # returns at once
+    release.set()
+    with pytest.raises(atmee.AtmeeException) as exc:
+        await starting
+    assert exc.value.code == "closed"
+    assert avatar.session_id == SESSION_ID
+    assert len(fake_atmee.calls("POST", END_PATH)) == 1
+    assert agent.output.audio_tails == []
+    assert not room.handlers.get("participant_disconnected")
+
+
+async def test_aclose_removes_the_avatar_while_the_end_call_is_slow(
+    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # At job shutdown the process has seconds: the avatar must leave the room
+    # without waiting for the end call.
+    fake_atmee.script("POST", SESSIONS_PATH, 202, _start_body())
+    avatar = atmee.AvatarSession(avatar_id=AVATAR_ID, conn_options=FAST, http_session=http_session)
+    await avatar.start(FakeAgentSession(), FakeRoom())  # type: ignore[arg-type]
+
+    from livekit.agents.voice.avatar import AvatarSession as BaseAvatarSession
+
+    removed, end_started, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    base_aclose = BaseAvatarSession.aclose
+
+    async def recording_base_aclose(self: Any) -> None:
+        removed.set()
+        await base_aclose(self)
+
+    async def slow_end(session_id: str) -> dict[str, Any]:
+        end_started.set()
+        await release.wait()
+        return {"sessionId": session_id, "status": "completed"}
+
+    monkeypatch.setattr(BaseAvatarSession, "aclose", recording_base_aclose)
+    monkeypatch.setattr(avatar.api, "end_avatar_session", slow_end)
+    closing = asyncio.create_task(avatar.aclose())
+    await asyncio.wait_for(end_started.wait(), timeout=1)
+    await asyncio.wait_for(removed.wait(), timeout=1)  # while the end is still pending
+    assert not closing.done()
+    release.set()
+    await closing
 
 
 async def test_wait_for_is_forwarded(
