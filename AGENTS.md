@@ -2,9 +2,8 @@
 
 `livekit-plugins-atmee` renders an Atmee avatar into a LiveKit room, driven by your
 LiveKit voice agent's speech: a **v1 avatar** (a talking head generated from a single
-portrait; the default) or a **v2 avatar** (invite-only; pass
-`AvatarSession(avatar_version="v2")`, whose first start after a quiet period may
-take minutes). This file gets you from clone to a talking avatar in minutes; the README has
+portrait) or a **v2 avatar** (invite-only, whose first start after a quiet period
+may take minutes; `start()` waits for it). Both render by their id. This file gets you from clone to a talking avatar in minutes; the README has
 the full API.
 
 ## 1. Setup (2 minutes)
@@ -59,8 +58,11 @@ agent leaves, the room closes, or `AvatarSession.aclose()` runs.
 ## 4. Gotchas
 
 - **Start the avatar before the agent session** (`await avatar.start(session,
-  room=...)` then `await session.start(...)`) so the agent's audio is routed to the
-  avatar instead of being published directly. The examples show the order.
+  room=...)` then `await session.start(...)`) so the avatar speaks from the agent's
+  first word. The examples show the order. With a v2 avatar, whose first start can
+  take minutes, you can start the agent first and attach the avatar in a background
+  task: the agent's voice moves to the avatar once it is in the room (README, "Start
+  the agent first").
 - **Explicit dispatch on shared projects.** A worker without `agent_name`
   auto-dispatches into every room of the LiveKit project.
 - **gpt-live-1 delegation:** the example defaults to `delegation="client"` — gpt-live-1
@@ -80,14 +82,17 @@ agent leaves, the room closes, or `AvatarSession.aclose()` runs.
   the key's spend cap is used up — the agent joins and immediately leaves because the
   avatar session is refused; raise the cap or use another key in the studio; a
   not-render-ready avatar when it has no portrait or is still processing; a capacity
-  error (`retry_after`) when Atmee is busy — back off, don't hammer.
+  error (`retry_after`) when Atmee is busy — back off, don't hammer;
+  `AtmeeAvatarWarmingError` when a v2 avatar's first start after a quiet period outlasts
+  the start's wait (nothing billed; try again after `retry_after`).
 
 ## 5. Repo map
 
 ```
 livekit/plugins/atmee/   the plugin: AvatarSession (avatar token + Atmee API + audio routing), AtmeeAPI
 examples/                runnable demos (see above) + .env.example
-tests/                   unit tests; tests/test_live_agent.py = manual live smoke test (RUN_LIVE_ATMEE_AGENT=1)
+tests/                   unit tests; manual live checks: tests/test_live_agent.py (RUN_LIVE_ATMEE_AGENT=1),
+                         tests/test_live_render.py (RUN_LIVE_ATMEE_RENDER=1, any avatar, no model)
 ```
 
 ## 6. Before you commit

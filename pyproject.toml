@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "livekit-plugins-atmee"
 dynamic = ["version"]
-description = "LiveKit Agents plugin for Atmee avatars: render a talking-head avatar from a single portrait into your agent's room"
+description = "LiveKit Agents plugin for Atmee avatars: render an Atmee avatar, v1 or v2, into your agent's room"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"

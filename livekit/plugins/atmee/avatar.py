@@ -38,9 +38,9 @@ from .api import (
     AtmeeAPI,
     AtmeeException,
     AvatarSessionInfo,
-    AvatarVersion,
     WaitFor,
-    _check_avatar_version,
+    _check_wait_for,
+    _warn_avatar_version,
 )
 from .log import logger
 
@@ -60,11 +60,11 @@ _TOKEN_TTL_SLACK = timedelta(minutes=10)
 class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
     """An Atmee avatar session: render an Atmee avatar into your agent's room.
 
-    A **v1 avatar** is a talking head generated from a single portrait (see
-    :meth:`AtmeeAPI.create_avatar`); a **v2 avatar** (invite-only) moves as a
-    whole and is created in the Atmee studio, CLI or MCP server. Pass
-    ``avatar_version="v2"`` for one: its first session after a quiet period can
-    take minutes to start, and the start waits for it.
+    Any Atmee avatar renders by its id: a **v1 avatar** is a talking head
+    generated from a single portrait (see :meth:`AtmeeAPI.create_avatar`); a
+    **v2 avatar** moves as a whole and is created in the Atmee studio. The
+    first v2 session after a quiet period can take a few minutes to start, and
+    :meth:`start` waits for it.
 
     The avatar joins the room as its own participant (``atmee-avatar-agent``)
     publishing on behalf of your agent; your agent's audio output is replaced
@@ -91,16 +91,11 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         wait_for: WaitFor = "initializing",
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
         http_session: aiohttp.ClientSession | None = None,
-        avatar_version: AvatarVersion = "v1",
+        avatar_version: NotGivenOr[str] = NOT_GIVEN,
     ) -> None:
         """
         Args:
-            avatar_id: the Atmee avatar to render (``AtmeeAPI.create_avatar``).
-            avatar_version: the avatar's generation, ``"v1"`` (default) or
-                ``"v2"``. Atmee renders the avatar as what it is either way;
-                the version sets how long :meth:`start` may wait for the avatar
-                to get ready (a minute for v1, five for v2, seven and a half
-                with ``wait_for="avatar_joined"``).
+            avatar_id: the Atmee avatar to render, v1 or v2.
             api_key: your ``sk_atmee_...`` key; defaults to ``ATMEE_API_KEY``.
             api_url: API base; defaults to ``ATMEE_API_URL`` or the Atmee cloud.
             avatar_participant_identity: identity the avatar joins with
@@ -110,17 +105,23 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
             metadata: free-form JSON attached to the session on the Atmee side.
             wait_for: ``"initializing"`` (default) returns from :meth:`start`
                 once the worker acknowledged the start; ``"avatar_joined"``
-                blocks until the avatar is in the room.
+                blocks until the avatar is in the room. Anything else raises
+                ``ValueError``.
+            conn_options: connect timeout and retries of the API calls that
+                are safe to repeat (reading the avatar before the start, ending
+                the session); see :class:`AtmeeAPI`.
             http_session: an aiohttp session to reuse; the job's shared one by
                 default, or a private one outside a job (released by
                 :meth:`aclose`).
+            avatar_version: deprecated and ignored; the avatar's own engine
+                decides how it renders.
         """
-        super().__init__()
+        _check_wait_for(wait_for)
+        _warn_avatar_version(avatar_version)
         if not avatar_id:
             raise AtmeeException("avatar_id is required")
-        _check_avatar_version(avatar_version)
+        super().__init__()
         self._avatar_id = avatar_id
-        self._avatar_version: AvatarVersion = avatar_version
         self._max_duration_seconds = int(max_duration_seconds)
         self._metadata = metadata
         self._wait_for: WaitFor = wait_for
@@ -148,6 +149,14 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         self._ended = False
         self._started = False
         self._render_requested = False
+        # aclose() was called: a start still waiting on its request then asks no
+        # more (_stop_start) and ends what the request opens instead of wiring
+        # it up. The request itself is never cancelled: the session it may open
+        # could not be ended without the id its answer carries.
+        self._closed = False
+        self._stop_start = asyncio.Event()
+        self._start_request: asyncio.Future[AvatarSessionInfo] | None = None
+        self._settle_tasks: set[asyncio.Task[bool]] = set()
         self._room_for_events: rtc.Room | None = None
         self._agent_session_for_events: AgentSession[Any] | None = None
         self._aclose_task: asyncio.Task[None] | None = None
@@ -159,11 +168,6 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
     @property
     def provider(self) -> str:
         return "atmee"
-
-    @property
-    def avatar_version(self) -> AvatarVersion:
-        """The avatar generation this session was started for (``"v1"`` or ``"v2"``)."""
-        return self._avatar_version
 
     @property
     def api(self) -> AtmeeAPI:
@@ -184,12 +188,21 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         Mints a LiveKit access token for the avatar participant with YOUR
         project's credentials (``LIVEKIT_URL`` / ``LIVEKIT_API_KEY`` /
         ``LIVEKIT_API_SECRET`` or the arguments), asks Atmee to render into
-        the room, and routes the agent's audio to the avatar. Call before
-        ``agent_session.start``.
+        the room, and routes the agent's audio to the avatar. Called before
+        ``agent_session.start``, the avatar speaks from the agent's first
+        word; called after it, the agent speaks with its own voice until the
+        avatar takes over. A v1 avatar's start is acknowledged within seconds;
+        the first v2 session after a quiet period can take a few minutes, and
+        this waits for it.
 
         One-shot: each call creates a separately billed render, so a second
         ``start()`` on the same instance raises. After a failed start, create
-        a new ``AvatarSession``.
+        a new ``AvatarSession``. If :meth:`aclose` runs while the start is
+        still waiting (the job shuts down, the agent session closes), the
+        start asks no more, the render it opened is ended and this raises an
+        ``AtmeeException`` with ``code="closed"``. If this call is cancelled,
+        its request still finishes in the background and the render it opens
+        is ended.
         """
         if self._started:
             raise AtmeeException(
@@ -274,43 +287,67 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
 
         logger.debug(
             "starting atmee avatar session",
-            extra={
-                "avatar_id": self._avatar_id,
-                "avatar_version": self._avatar_version,
-                "lk.pii.room": room.name,
-            },
+            extra={"avatar_id": self._avatar_id, "lk.pii.room": room.name},
         )
+        if self._closed:
+            # closed before the render was requested: never open a billed render
+            raise AtmeeException("the avatar session was closed before it started", code="closed")
         self._render_requested = True
-        info = await self._api.create_avatar_session(
-            self._avatar_id,
-            livekit_url=livekit_url,
-            livekit_token=livekit_token,
-            agent_identity=local_participant_identity,
-            max_duration_seconds=self._max_duration_seconds,
-            metadata=self._metadata,
-            wait_for=self._wait_for,
-            avatar_version=self._avatar_version,
+        # The agent session can close without the job shutting down
+        # (AgentSession.aclose(), an error), even while the start is still
+        # waiting: end the render then too, or it would bill until
+        # max_duration_seconds.
+        self._agent_session_for_events = agent_session
+        agent_session.on("close", self._on_agent_session_close)
+        request = asyncio.ensure_future(
+            self._api.create_avatar_session(
+                self._avatar_id,
+                livekit_url=livekit_url,
+                livekit_token=livekit_token,
+                agent_identity=local_participant_identity,
+                max_duration_seconds=self._max_duration_seconds,
+                metadata=self._metadata,
+                wait_for=self._wait_for,
+                stop=self._stop_start,
+            )
         )
+        self._start_request = request
+        try:
+            # waits without cancelling the request when start() itself is cancelled
+            await asyncio.wait({request})
+        except asyncio.CancelledError:
+            # The caller gave up on start() (the job shuts down, a timeout of
+            # its own): let the request finish and end what it opens.
+            self._closed = True
+            self._stop_start.set()
+            task = asyncio.ensure_future(self._settle_closed_start(request))
+            self._settle_tasks.add(task)
+            task.add_done_callback(self._settle_tasks.discard)
+            raise
+        if self._closed:
+            # aclose() ran while the request was waiting and left the teardown
+            # to this start: end the session the API opened, if any, remove
+            # the avatar and release the client, wiring nothing up.
+            opened = await self._settle_closed_start(request)
+            raise AtmeeException(
+                "the avatar session was closed while it was starting"
+                + ("; its render was ended" if opened else ""),
+                code="closed",
+            )
+        info = request.result()
         self.session_info = info
         self.session_id = info.session_id
         logger.info(
             "atmee avatar session started",
             extra={
                 "session_id": info.session_id,
-                "avatar_version": info.avatar_version,
                 "status": info.status,
-                "billing_mode": info.billing_mode,
                 "max_duration_seconds": info.max_duration_seconds,
             },
         )
 
         self._room_for_events = room
         room.on("participant_disconnected", self._on_participant_disconnected)
-        # The agent session can close without the job shutting down
-        # (AgentSession.aclose(), an error): end the render then too, or it
-        # would bill until max_duration_seconds.
-        self._agent_session_for_events = agent_session
-        agent_session.on("close", self._on_agent_session_close)
 
         agent_session.output.replace_audio_tail(
             DataStreamAudioOutput(
@@ -341,6 +378,19 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
     def _schedule_end(self) -> None:
         if self._end_task is None or self._end_task.done():
             self._end_task = asyncio.create_task(self._end_session())
+
+    async def _settle_closed_start(self, request: asyncio.Future[AvatarSessionInfo]) -> bool:
+        """Close everything once a start closed mid-request has its answer:
+        end the session it opened, if any. Returns whether one was opened."""
+        await asyncio.wait({request})
+        info = None
+        if not request.cancelled() and request.exception() is None:
+            info = request.result()  # failed or stopped requests opened nothing
+        if info is not None:
+            self.session_id = info.session_id
+        async with self._close_lock:
+            await self._aclose_locked()
+        return info is not None
 
     async def _end_session(self) -> None:
         """Best-effort ``POST /v1/avatar_sessions/{id}/end``.
@@ -375,6 +425,16 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
             self._ended = True
             logger.debug("atmee avatar session ended", extra={"session_id": self.session_id})
 
+    async def _finish_end(self) -> None:
+        # an end already under way (the avatar left on its own) finishes first,
+        # so none is still running once the HTTP client is released
+        if self._end_task is not None and not self._end_task.done():
+            try:
+                await self._end_task
+            except Exception:
+                pass
+        await self._end_session()
+
     async def aclose(self) -> None:
         """End the Atmee session and remove the avatar from the room.
 
@@ -384,6 +444,8 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         calls are serialized, so the HTTP session is never closed while
         another call is still ending the render.
         """
+        self._closed = True
+        self._stop_start.set()
         async with self._close_lock:
             await self._aclose_locked()
 
@@ -394,11 +456,16 @@ class AvatarSession(BaseAvatarSession[Literal["avatar_disconnected"]]):
         if self._agent_session_for_events is not None:
             self._agent_session_for_events.off("close", self._on_agent_session_close)
             self._agent_session_for_events = None
-        if self._end_task is not None and not self._end_task.done():
-            try:
-                await self._end_task
-            except Exception:
-                pass
-        await self._end_session()
-        await super().aclose()
+        if self._start_request is not None and not self._start_request.done():
+            # A start is still waiting on its request, with no session to end
+            # yet: once the request returns, the session it opened is ended and
+            # everything here is closed (see _settle_closed_start).
+            return
+        # Remove the avatar participant and end the render side by side, so the
+        # avatar leaves at once even when the end call is slow: at job shutdown
+        # the process has only a few seconds.
+        results = await asyncio.gather(super().aclose(), self._finish_end(), return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning("atmee avatar session cleanup step failed", exc_info=result)
         await self._api.aclose()
