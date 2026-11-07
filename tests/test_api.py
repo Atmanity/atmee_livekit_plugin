@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-from pathlib import Path
 from typing import Any
 
 import aiohttp
@@ -10,7 +8,6 @@ import pytest
 from livekit.agents import APIConnectOptions
 from livekit.plugins import atmee
 from livekit.plugins.atmee import (
-    CREATABLE_AVATAR_VERSIONS,
     SUPPORTED_AVATAR_VERSIONS,
     AtmeeAPI,
     AtmeeAvatarNotReadyError,
@@ -73,7 +70,6 @@ async def test_create_avatar_session_sends_key_and_payload(
 
 def test_the_0_2_version_names_are_still_importable() -> None:
     assert SUPPORTED_AVATAR_VERSIONS == frozenset({"v1", "v2"})
-    assert CREATABLE_AVATAR_VERSIONS == frozenset({"v1"})
 
 
 @pytest.mark.parametrize("avatar_version", ["v1", "v2"])
@@ -281,109 +277,6 @@ async def test_end_and_get_avatar_session(
     assert got["status"] == "completed"
 
 
-async def test_create_avatar_from_file_is_multipart(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, tmp_path: Path
-) -> None:
-    portrait = tmp_path / "val.png"
-    portrait.write_bytes(b"\x89PNG\r\n\x1a\nfakepng")
-    fake_atmee.script(
-        "POST",
-        "/v1/avatars",
-        201,
-        {"avatarId": AVATAR_ID, "kind": "render_only", "status": "ready", "statusUrl": "x"},
-    )
-    api = AtmeeAPI(session=http_session, conn_options=FAST)
-    avatar_id = await api.create_avatar("Val", portrait, description="from a test")
-    assert avatar_id == AVATAR_ID
-    call = fake_atmee.calls("POST", "/v1/avatars")[0]
-    assert call.form["name"] == "Val"
-    assert call.form["description"] == "from a test"
-    assert call.form["file"]["filename"] == "val.png"
-    assert call.form["file"]["content_type"] == "image/png"
-    assert call.form["file"]["data"] == b"\x89PNG\r\n\x1a\nfakepng"
-    assert set(call.form) == {"name", "description", "file"}  # no version field
-
-
-async def test_create_avatar_reports_v1_by_default(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
-) -> None:
-    fake_atmee.script(
-        "POST",
-        "/v1/avatars",
-        201,
-        {"avatarId": AVATAR_ID, "kind": "render_only", "status": "ready"},
-    )
-    api = AtmeeAPI(session=http_session, conn_options=FAST)
-    info = await api.create_avatar_info("Val", b"jpegbytes")
-    # `kind` comes from the API (voice/persona or not); the API names no engine
-    # here, and the deprecated `version` falls back to v1.
-    assert info.kind == "render_only"
-    assert info.engine is None and info.version == "v1"
-    assert "version" not in info.raw
-    assert set(fake_atmee.calls("POST", "/v1/avatars")[0].form) == {"name", "file"}
-
-
-@pytest.mark.parametrize("avatar_version", ["v1", "v2"])
-async def test_create_avatar_ignores_avatar_version(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession, avatar_version: str
-) -> None:
-    # create_avatar makes a v1 avatar from one portrait; the deprecated
-    # argument is accepted and changes nothing in the manifest.
-    fake_atmee.script("POST", "/v1/avatars", 201, {"avatarId": AVATAR_ID, "status": "ready"})
-    api = AtmeeAPI(session=http_session, conn_options=FAST)
-    await api.create_avatar_info(
-        "Val", "https://cdn.example/val.jpg", avatar_version=avatar_version
-    )
-    assert fake_atmee.calls("POST", "/v1/avatars")[0].json == {
-        "schemaVersion": 1,
-        "name": "Val",
-        "assets": {"image": {"url": "https://cdn.example/val.jpg"}},
-    }
-
-
-async def test_create_avatar_from_bytes(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
-) -> None:
-    fake_atmee.script("POST", "/v1/avatars", 201, {"avatarId": AVATAR_ID, "status": "ready"})
-    api = AtmeeAPI(session=http_session, conn_options=FAST)
-    await api.create_avatar("Val", b"webpbytes", content_type="image/webp")
-    part = fake_atmee.calls("POST", "/v1/avatars")[0].form["file"]
-    assert part["filename"] == "portrait.webp" and part["content_type"] == "image/webp"
-
-
-async def test_create_avatar_from_url_is_json_manifest(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
-) -> None:
-    fake_atmee.script(
-        "POST",
-        "/v1/avatars",
-        201,
-        {"avatarId": AVATAR_ID, "kind": "render_only", "status": "ready", "statusUrl": "x"},
-    )
-    api = AtmeeAPI(session=http_session, conn_options=FAST)
-    info = await api.create_avatar_info("Val", "https://cdn.example/val.jpg")
-    assert fake_atmee.calls("POST", "/v1/avatars")[0].json == {
-        "schemaVersion": 1,
-        "name": "Val",
-        "assets": {"image": {"url": "https://cdn.example/val.jpg"}},
-    }
-    assert info.ready and info.kind == "render_only"
-
-
-async def test_wait_until_ready_polls(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
-) -> None:
-    path = f"/v1/avatars/{AVATAR_ID}"
-    fake_atmee.script("GET", path, 200, {"avatarId": AVATAR_ID, "status": "building"})
-    fake_atmee.script(
-        "GET", path, 200, {"avatarId": AVATAR_ID, "status": "ready", "kind": "conversational"}
-    )
-    api = AtmeeAPI(session=http_session, conn_options=FAST)
-    info = await api.wait_until_ready(AVATAR_ID, timeout=10, poll_interval=0)
-    assert info.ready and info.kind == "conversational"
-    assert len(fake_atmee.calls("GET", path)) == 2
-
-
 def test_missing_api_key_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ATMEE_API_KEY")
     with pytest.raises(AtmeeException):
@@ -413,20 +306,6 @@ def test_plaintext_api_url_is_refused() -> None:
     AtmeeAPI(api_url="https://api.example.com")
 
 
-async def test_wait_until_ready_honours_its_timeout(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
-) -> None:
-    path = f"/v1/avatars/{AVATAR_ID}"
-    fake_atmee.script("GET", path, 200, {"avatarId": AVATAR_ID, "status": "building"}, times=5)
-    api = AtmeeAPI(session=http_session, conn_options=FAST)
-    loop = asyncio.get_running_loop()
-    began = loop.time()
-    with pytest.raises(AtmeeException) as exc:
-        await api.wait_until_ready(AVATAR_ID, timeout=0.2, poll_interval=30)
-    assert exc.value.code == "timeout"
-    assert loop.time() - began < 2  # the 30 s poll interval was capped by the deadline
-
-
 async def test_malformed_success_is_a_typed_error(
     fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
 ) -> None:
@@ -437,23 +316,6 @@ async def test_malformed_success_is_a_typed_error(
         await api.get_avatar_session(SESSION_ID)
     assert exc.value.code == "invalid_response"
     assert len(fake_atmee.calls("GET", get_path)) == 1  # a 2xx is never retried
-
-
-async def test_wait_until_ready_deadline_bounds_retries(
-    fake_atmee: FakeAtmee, http_session: aiohttp.ClientSession
-) -> None:
-    path = f"/v1/avatars/{AVATAR_ID}"
-    fake_atmee.script("GET", path, 502, body="bad gateway", times=20)
-    slow_retries = APIConnectOptions(max_retry=5, retry_interval=30.0, timeout=5.0)
-    api = AtmeeAPI(session=http_session, conn_options=slow_retries)
-    loop = asyncio.get_running_loop()
-    began = loop.time()
-    with pytest.raises(AtmeeException) as exc:
-        await api.wait_until_ready(AVATAR_ID, timeout=0.3, poll_interval=30)
-    # deadline expiry is a timeout, not the last 5xx seen before it
-    assert exc.value.code == "timeout"
-    # the 30 s retry pauses were cut to the remaining budget
-    assert loop.time() - began < 2
 
 
 async def test_plain_503_is_retried_like_any_5xx(

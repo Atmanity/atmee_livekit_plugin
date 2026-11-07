@@ -19,7 +19,7 @@ Python 3.10+. Everything reads `.env` via `python-dotenv`.
 |---|---|---|
 | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | everything | your LiveKit Cloud project (or self-hosted LiveKit server) |
 | `ATMEE_API_KEY` (`sk_atmee_...`) | rendering | create at https://www.atmee.ai/studio/api-keys |
-| `ATMEE_AVATAR_ID` | rendering | `uv run python examples/create_avatar.py <portrait.jpg>` prints one |
+| `ATMEE_AVATAR_ID` | rendering | an avatar id from the Atmee studio (https://www.atmee.ai/studio) |
 | `ATMEE_API_URL` | *optional* | defaults to production `https://api.atmanity.us`; set only to target another environment |
 | `OPENAI_API_KEY` | both example agents | the gpt-live-1 example needs gpt-live-1 access |
 | `DEEPGRAM_API_KEY` | `examples/agent.py` (STT) | deepgram.com |

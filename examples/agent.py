@@ -25,7 +25,7 @@ from livekit.plugins import atmee, deepgram, openai, silero
 
 load_dotenv()
 
-# The avatar to render: create one with examples/create_avatar.py.
+# The avatar to render: an avatar id from the Atmee studio.
 ATMEE_AVATAR_ID = os.environ["ATMEE_AVATAR_ID"]
 
 
