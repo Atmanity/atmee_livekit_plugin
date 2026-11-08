@@ -26,7 +26,6 @@ class Recorded:
     query: dict[str, str]
     headers: dict[str, str]
     json: Any = None
-    form: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -79,18 +78,6 @@ class FakeAtmee:
         ctype = request.content_type
         if ctype == "application/json":
             rec.json = await request.json()
-        elif ctype.startswith("multipart/"):
-            reader = await request.multipart()
-            async for part in reader:
-                name = part.name or ""
-                if part.filename:
-                    rec.form[name] = {
-                        "filename": part.filename,
-                        "content_type": part.headers.get("Content-Type"),
-                        "data": await part.read(decode=False),
-                    }
-                else:
-                    rec.form[name] = (await part.read(decode=False)).decode()
         self.requests.append(rec)
         self.arrived[(request.method, request.path)].set()
 

@@ -2,7 +2,7 @@
 
 Bring your own LiveKit voice agent; Atmee renders its avatar into your room:
 a **v1 avatar**, a talking head generated from a single portrait, or a **v2
-avatar** (invite-only), which moves as a whole. Works like the other
+avatar** (invite-only), which moves as a whole, rendered by its id. Works like the other
 avatar plugins for [LiveKit Agents](https://docs.livekit.io/agents/): the
 avatar joins your room as its own participant, your agent's speech drives its
 video.
@@ -10,9 +10,7 @@ video.
 ```python
 from livekit.plugins import atmee
 
-avatar_id = await atmee.AtmeeAPI().create_avatar(name="Val", image="portrait.jpg")
-
-avatar = atmee.AvatarSession(avatar_id=avatar_id)   # ATMEE_API_KEY in the environment
+avatar = atmee.AvatarSession(avatar_id="...")       # ATMEE_API_KEY in the environment
 await avatar.start(session, room=ctx.room)
 await session.start(agent=..., room=ctx.room)       # the agent's TTS drives the avatar's video
 ```
@@ -37,21 +35,12 @@ Python 3.10+, `livekit-agents` 1.6.8 or newer.
 
 ## Usage
 
-### 1. Create an avatar from a portrait
+### 1. Create an avatar
 
-Once, from a script or your backend (see `examples/create_avatar.py`):
-
-```python
-async with atmee.AtmeeAPI() as api:   # reads ATMEE_API_KEY from the environment
-    avatar_id = await api.create_avatar(name="Val", image="portrait.jpg")
-```
-
-All it needs is a **name** and a single **portrait**. `image` may be a local
-file path, raw image bytes, or an `https://` URL Atmee can download; `.jpg`,
-`.png`, and `.webp` are accepted. A portrait-only avatar is render-ready
-immediately — nothing to wait for. You can also create and manage avatars in the
-Atmee studio at [atmee.ai](https://atmee.ai); any avatar of your account with a
-portrait works.
+The plugin renders avatars; it doesn't create them. Create one, v1 or v2, in
+the [Atmee studio](https://www.atmee.ai/docs/studio/create-an-avatar) or with
+the [Atmee API](https://www.atmee.ai/docs/api/create-avatar), and copy its id.
+Any avatar of your account works.
 
 ### 2. Render it in your agent
 
@@ -129,14 +118,15 @@ info.engine                               # "v1", "v2" or "v2hd", as the API rep
 info.ready                                # built, and for v2, serving a take
 ```
 
-`AtmeeAPI.create_avatar()` makes v1 avatars from one portrait. A v2 avatar
-also needs a voice and a take built over minutes: create one in the Atmee
-studio, or with the Atmee CLI or MCP server, and render it here by its id.
 The generation is unrelated to `AvatarInfo.kind` (`conversational` |
 `render_only`), which says whether an avatar has a voice and persona.
 
-**Upgrading from 0.2:** `avatar_version` is still accepted by `AvatarSession`,
-`create_avatar_session()` and `create_avatar()`, but ignored, with a logged
+**Upgrading from 0.3:** `AtmeeAPI.create_avatar()`, `create_avatar_info()` and
+`wait_until_ready()` are gone, along with `CREATABLE_AVATAR_VERSIONS`: create
+avatars in the Atmee studio or with the Atmee API (see above).
+
+**Upgrading from 0.2:** `avatar_version` is still accepted by `AvatarSession`
+and `create_avatar_session()`, but ignored, with a logged
 warning; remove it. `AvatarInfo.version` is now an alias of `engine`, and
 `AvatarSession.avatar_version` and `AvatarSessionInfo.avatar_version` are gone.
 `AvatarSessionInfo.billing_mode` is deprecated: Atmee bills every session as it
@@ -189,8 +179,6 @@ out; nothing was billed).
   example: prints a viewer URL, waits until you've joined, then dispatches the
   avatar into that room (viewer-first). Run the worker in one terminal and this
   in another.
-- [`examples/create_avatar.py`](examples/create_avatar.py) — create an avatar
-  from a portrait and print its id.
 - [`tests/test_live_agent.py`](tests/test_live_agent.py) — a manual live
   smoke test: a real GPT voice agent (OpenAI LLM + TTS, silero VAD) with an
   Atmee avatar in a real LiveKit room, asserting the avatar joins, publishes
